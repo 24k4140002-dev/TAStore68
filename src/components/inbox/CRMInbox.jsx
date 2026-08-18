@@ -62,7 +62,16 @@ export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitc
     }
   });
   const [selectedPageId, setSelectedPageId] = useState(() => localStorage.getItem('metapost_selected_page_id') || 'all');
-  const [conversations, setConversations] = useState(() => JSON.parse(localStorage.getItem('metapost_inbox_cache') || '[]'));
+  const [conversations, setConversations] = useState(() => {
+    const savedPageId = localStorage.getItem('metapost_selected_page_id') || 'all';
+    try {
+      const perPage = JSON.parse(localStorage.getItem(`metapost_inbox_cache_${savedPageId}`) || 'null');
+      if (perPage && perPage.length > 0) return perPage;
+      return JSON.parse(localStorage.getItem('metapost_inbox_cache') || '[]');
+    } catch {
+      return [];
+    }
+  });
   const [activeConversation, setActiveConversation] = useState(null);
   const [messages, setMessages] = useState([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
@@ -153,10 +162,10 @@ export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitc
   const [hasMoreOlder, setHasMoreOlder] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
 
-  // 3. Fetch All Conversations in Parallel (Throttled to avoid Rate Limit #4)
-  const loadAllConversations = useCallback(async (currentPages = pages) => {
+  // 3. Fetch All Conversations in Parallel (Throttled to avoid Rate Limit #4, supports Silent Background Sync)
+  const loadAllConversations = useCallback(async (currentPages = pages, silent = false) => {
     if (!fbToken || currentPages.length === 0) return;
-    setIsLoadingConversations(true);
+    if (!silent) setIsLoadingConversations(true);
 
     try {
       const storedPageId = localStorage.getItem('metapost_selected_page_id') || selectedPageId;
@@ -214,6 +223,7 @@ export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitc
 
       setConversations(combined);
       localStorage.setItem('metapost_inbox_cache', JSON.stringify(combined));
+      localStorage.setItem(`metapost_inbox_cache_${storedPageId}`, JSON.stringify(combined));
 
       // Restore active conversation from localStorage on load/F5
       const savedActiveId = localStorage.getItem('metapost_active_conv_id');
@@ -230,7 +240,7 @@ export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitc
     } catch (err) {
       console.error('Fetch all conversations error:', err);
     } finally {
-      setIsLoadingConversations(false);
+      if (!silent) setIsLoadingConversations(false);
     }
   }, [fbToken, pages, selectedPageId, activeConversation]);
 
@@ -729,7 +739,20 @@ function playChimeSound() {
             const targetPages = pageId === 'all'
               ? (activePages.length > 0 ? activePages : pages)
               : pages.filter(p => p.id === pageId);
-            loadAllConversations(targetPages);
+
+            // ⚡ Instant SWR Switch: Render cached conversations in 0.001s without spinner
+            try {
+              const cachedForPage = JSON.parse(localStorage.getItem(`metapost_inbox_cache_${pageId}`) || 'null');
+              if (cachedForPage && cachedForPage.length > 0) {
+                setConversations(cachedForPage);
+                // Background silent sync to pull any fresh messages without freezing screen
+                loadAllConversations(targetPages, true);
+                return;
+              }
+            } catch {}
+
+            // If first time loading this page, load with spinner
+            loadAllConversations(targetPages, false);
           }}
           conversations={conversations}
           activeConversation={activeConversation}
