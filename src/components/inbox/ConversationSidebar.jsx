@@ -15,6 +15,7 @@ import {
   Edit3
 } from 'lucide-react';
 import { getInitials, getAvatarColor, formatTimeAgo, getPageDisplayName } from '../../services/facebookApi';
+import CustomerAvatar from '../common/CustomerAvatar';
 
 export default function ConversationSidebar({
   pages,
@@ -320,25 +321,12 @@ export default function ConversationSidebar({
               >
                 {/* Avatar with fallback */}
                 <div className="relative flex-shrink-0">
-                  <div className="w-12 h-12 rounded-full overflow-hidden border border-slate-200 dark:border-slate-700 flex items-center justify-center bg-slate-100 dark:bg-slate-800 text-white font-bold text-sm shadow-xs">
-                    {conv.avatar_url ? (
-                      <img
-                        src={conv.avatar_url}
-                        alt={conv.customer_name}
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          e.target.style.display = 'none';
-                          e.target.nextSibling.style.display = 'flex';
-                        }}
-                      />
-                    ) : null}
-                    <div
-                      className={`w-full h-full flex items-center justify-center ${conv.avatar_url ? 'hidden' : 'flex'}`}
-                      style={{ background: bgColor }}
-                    >
-                      {initials}
-                    </div>
-                  </div>
+                  <CustomerAvatar
+                    url={conv.avatar_url}
+                    name={conv.customer_name}
+                    size="w-12 h-12"
+                    textClass="text-sm font-bold"
+                  />
 
                   <span
                     className={`absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center text-[10px] text-white border-2 border-white dark:border-slate-900 ${

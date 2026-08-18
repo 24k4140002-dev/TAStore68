@@ -309,7 +309,7 @@ export async function fetchPageConversations(pageId, pageName, pageToken) {
   if (!pageId || !pageToken) return [];
   try {
     const res = await safeFetch(
-      `${API_BASE}/${pageId}/conversations?fields=id,updated_time,unread_count,participants{id,name,picture{data{url}}},can_reply,messages.limit(1){id,message,created_time,from,attachments{mime_type,file_url,image_data}}&limit=30&access_token=${encodeURIComponent(pageToken)}`
+      `${API_BASE}/${pageId}/conversations?fields=id,updated_time,unread_count,participants{id,name,picture{data{url}}},can_reply,messages.limit(1){id,message,created_time,from,attachments{mime_type,file_url,image_data}}&limit=50&access_token=${encodeURIComponent(pageToken)}`
     );
 
     if (!res.data) return [];
@@ -325,9 +325,7 @@ export async function fetchPageConversations(pageId, pageName, pageToken) {
       const customer = participants.find(p => p.id !== pageId);
       const lastMsg = conv.messages?.data?.[0];
       const customerPsid = customer?.id || '';
-      const avatarUrl = customer?.picture?.data?.url || (customerPsid && pageToken
-        ? `${API_BASE}/${customerPsid}/picture?type=square&height=100&width=100&access_token=${encodeURIComponent(pageToken)}`
-        : '');
+      const avatarUrl = customer?.picture?.data?.url || null;
 
       // Load saved local labels for this conversation or customer
       let savedLabels = [];

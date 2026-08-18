@@ -686,8 +686,8 @@ function playChimeSound() {
         />
       </div>
 
-      {/* 2. Middle: Chat Thread (hidden on mobile if in list view) */}
-      <div className={`flex-1 flex flex-col min-w-0 ${mobileView === 'list' ? 'hidden md:flex' : 'flex'}`}>
+      {/* 2. Middle: Chat Thread (Fullscreen on Mobile, standard column on Desktop) */}
+      <div className={`flex-1 flex flex-col min-w-0 ${mobileView === 'list' ? 'hidden md:flex' : 'fixed inset-0 z-40 bg-white dark:bg-slate-950 flex flex-col md:relative md:inset-auto md:z-auto md:flex'}`}>
         <ChatThread
           conversation={activeConversation}
           messages={messages}
