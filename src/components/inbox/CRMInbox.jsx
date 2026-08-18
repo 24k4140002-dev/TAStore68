@@ -10,6 +10,7 @@ const LabelsManagerModal = lazy(() => import('./LabelsManagerModal'));
 const QuickRepliesModal = lazy(() => import('./QuickRepliesModal'));
 const VietQRModal = lazy(() => import('./VietQRModal'));
 const AutoRulesModal = lazy(() => import('./AutoRulesModal'));
+const PageManagerModal = lazy(() => import('./PageManagerModal'));
 import {
   fetchPages,
   fetchPageConversations,
@@ -53,12 +54,24 @@ function saveReadMap(map) {
 
 export default function CRMInbox({ fbToken, onOpenTokenModal }) {
   const [pages, setPages] = useState(() => JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]'));
+  const [visiblePageIds, setVisiblePageIds] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('metapost_visible_page_ids') || '[]');
+    } catch {
+      return [];
+    }
+  });
   const [selectedPageId, setSelectedPageId] = useState(() => localStorage.getItem('metapost_selected_page_id') || 'all');
   const [conversations, setConversations] = useState(() => JSON.parse(localStorage.getItem('metapost_inbox_cache') || '[]'));
   const [activeConversation, setActiveConversation] = useState(null);
   const [messages, setMessages] = useState([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
+
+  // Computed active pages (filtered by user selection, e.g. 3-5 stores)
+  const activePages = visiblePageIds.length > 0
+    ? pages.filter(p => visiblePageIds.includes(p.id))
+    : pages;
 
   // Mobile state: 'list' (shows sidebar) | 'chat' (shows thread)
   const [mobileView, setMobileView] = useState('list');
@@ -94,6 +107,7 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
   const [isQuickRepliesOpen, setIsQuickRepliesOpen] = useState(false);
   const [isVietQROpen, setIsVietQROpen] = useState(false);
   const [isAutoRulesOpen, setIsAutoRulesOpen] = useState(false);
+  const [isPageManagerOpen, setIsPageManagerOpen] = useState(false);
 
   // 1. Load Meta & Page Labels (from localStorage & defaults)
   const loadLabelsAndTags = () => {
@@ -633,7 +647,10 @@ function playChimeSound() {
           onMarkAllAsRead={handleMarkAllAsRead}
         />
         <ConversationSidebar
-          pages={pages}
+          pages={activePages.length > 0 ? activePages : pages}
+          allPages={pages}
+          visiblePageIds={visiblePageIds}
+          onOpenPageManager={() => setIsPageManagerOpen(true)}
           selectedPageId={selectedPageId}
           onSelectPage={(pageId) => {
             setSelectedPageId(pageId);
@@ -652,7 +669,7 @@ function playChimeSound() {
           onSelectLabel={setSelectedLabelId}
           allLabels={allLabels}
           onOpenLabelsManager={() => setIsLabelsManagerOpen(true)}
-          onRefresh={() => loadAllConversations()}
+          onRefresh={() => loadAllConversations(activePages.length > 0 ? activePages : pages)}
           isLoading={isLoadingConversations}
           onMarkAllAsRead={handleMarkAllAsRead}
           onOpenTokenModal={onOpenTokenModal}
@@ -776,6 +793,18 @@ function playChimeSound() {
           <AutoRulesModal
             isOpen={isAutoRulesOpen}
             onClose={() => setIsAutoRulesOpen(false)}
+          />
+        )}
+
+        {isPageManagerOpen && (
+          <PageManagerModal
+            allPages={pages}
+            visiblePageIds={visiblePageIds}
+            onSaveVisiblePages={(newIds) => {
+              setVisiblePageIds(newIds);
+              localStorage.setItem('metapost_visible_page_ids', JSON.stringify(newIds));
+            }}
+            onClose={() => setIsPageManagerOpen(false)}
           />
         )}
       </Suspense>
