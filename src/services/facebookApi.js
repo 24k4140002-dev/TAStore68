@@ -437,14 +437,21 @@ export async function fetchAllPagesUnreadSummary(allPages, fbToken) {
   return { total, perPage };
 }
 
-// Fetch messages for a conversation (Ultra-fast direct fetch)
-export async function fetchConversationMessages(conversationId, pageToken) {
+// Fetch messages for a conversation (Ultra-fast direct fetch with 80-message default and pagination)
+export async function fetchConversationMessages(conversationId, pageToken, cursor = null, limit = 80) {
   if (!conversationId || !pageToken) return [];
   try {
-    const res = await safeFetch(
-      `${API_BASE}/${conversationId}/messages?fields=id,created_time,from,message,attachments{id,mime_type,name,size,file_url,image_data},sticker&limit=40&access_token=${encodeURIComponent(pageToken)}`
-    );
-    const msgs = (res?.data || []).reverse();
+    let url = `${API_BASE}/${conversationId}/messages?fields=id,created_time,from,message,attachments{id,mime_type,name,size,file_url,image_data},sticker&limit=${limit}&access_token=${encodeURIComponent(pageToken)}`;
+    if (cursor) {
+      if (typeof cursor === 'string' && cursor.startsWith('http')) {
+        url = cursor;
+      } else {
+        url += `&after=${encodeURIComponent(cursor)}`;
+      }
+    }
+    const res = await safeFetch(url);
+    const rawData = res?.data || [];
+    const msgs = [...rawData].reverse();
     msgs.forEach(msg => {
       if (msg.sticker) {
         msg.is_sticker = true;
@@ -453,6 +460,8 @@ export async function fetchConversationMessages(conversationId, pageToken) {
         }
       }
     });
+    msgs.hasMore = Boolean(res?.paging?.next || res?.paging?.cursors?.after);
+    msgs.nextCursor = res?.paging?.cursors?.after || res?.paging?.next || null;
     return msgs;
   } catch (err) {
     console.error('fetchConversationMessages error:', err);

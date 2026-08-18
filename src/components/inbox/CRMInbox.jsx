@@ -77,6 +77,9 @@ export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitc
   const [activeConversation, setActiveConversation] = useState(null);
   const [messages, setMessages] = useState([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [messagesNextCursor, setMessagesNextCursor] = useState(null);
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
 
   // Computed active pages (filtered by user selection, e.g. 3-5 stores)
@@ -397,11 +400,15 @@ function playChimeSound() {
       // Sync read status with Facebook Meta Business Suite (non-blocking)
       markConversationAsRead(conv.fb_conversation_id, conv.page_token || fbToken);
 
-      const msgs = await fetchConversationMessages(conv.fb_conversation_id, conv.page_token || fbToken);
+      const msgs = await fetchConversationMessages(conv.fb_conversation_id, conv.page_token || fbToken, null, 80);
       if (Array.isArray(msgs) && msgs.length > 0) {
         setMessages(msgs);
+        setMessagesNextCursor(msgs.nextCursor || null);
+        setHasMoreMessages(!!msgs.hasMore);
         localStorage.setItem(`metapost_msgs_${conv.fb_conversation_id}`, JSON.stringify(msgs));
         sessionStorage.setItem(`metapost_msgs_${conv.fb_conversation_id}`, JSON.stringify(msgs));
+      } else {
+        setHasMoreMessages(false);
       }
       setIsLoadingMessages(false);
 
@@ -430,10 +437,14 @@ function playChimeSound() {
       }
 
       // Load customer orders from localStorage
-      const savedOrders = JSON.parse(localStorage.getItem(`orders_${conv.customer_psid}`) || '[]');
-      setCustomerOrders(savedOrders);
+      if (conv.customer_psid) {
+        const savedOrders = JSON.parse(localStorage.getItem(`orders_${conv.customer_psid}`) || '[]');
+        setCustomerOrders(savedOrders);
+      } else {
+        setCustomerOrders([]);
+      }
 
-      // Load customer notes & contact info from localStorage
+      // Load customer CRM data (phone, email, notes) from localStorage
       if (conv.customer_psid) {
         const savedCust = JSON.parse(localStorage.getItem(`metapost_cust_${conv.customer_psid}`) || '{}');
         const savedNotes = JSON.parse(localStorage.getItem(`metapost_notes_${conv.customer_psid}`) || '[]');
@@ -452,11 +463,41 @@ function playChimeSound() {
     }
   };
 
+  // Load older messages (Yesterday, last week, etc.)
+  const handleLoadOlderMessages = async () => {
+    if (!activeConversation?.fb_conversation_id || isLoadingOlderMessages) return;
+    setIsLoadingOlderMessages(true);
+    try {
+      const olderMsgs = await fetchConversationMessages(
+        activeConversation.fb_conversation_id,
+        activeConversation.page_token || fbToken,
+        messagesNextCursor,
+        50
+      );
+      if (Array.isArray(olderMsgs) && olderMsgs.length > 0) {
+        setMessages(prev => {
+          const existingIds = new Set(prev.map(m => m.id));
+          const newOlder = olderMsgs.filter(m => !existingIds.has(m.id));
+          const merged = [...newOlder, ...prev];
+          localStorage.setItem(`metapost_msgs_${activeConversation.fb_conversation_id}`, JSON.stringify(merged));
+          return merged;
+        });
+        setMessagesNextCursor(olderMsgs.nextCursor || null);
+        setHasMoreMessages(!!olderMsgs.hasMore);
+      } else {
+        setHasMoreMessages(false);
+      }
+    } catch (err) {
+      console.warn('Load older messages error:', err);
+    } finally {
+      setIsLoadingOlderMessages(false);
+    }
+  };
+
   // 5. Real-time Active Thread Polling (Sync new messages in 3-4s without page reload)
   useEffect(() => {
     if (!activeConversation?.fb_conversation_id || !fbToken) return;
 
-    const convId = activeConversation.fb_conversation_id;
     const pageId = activeConversation.page_id;
     const token = activeConversation.page_token || fbToken;
 
@@ -870,6 +911,9 @@ function playChimeSound() {
           onOpenQuickRepliesModal={() => setIsQuickRepliesOpen(true)}
           onOpenVietQRModal={() => setIsVietQROpen(true)}
           onOpenAutoRulesModal={() => setIsAutoRulesOpen(true)}
+          onLoadOlderMessages={handleLoadOlderMessages}
+          hasMoreOlderMessages={hasMoreMessages}
+          isLoadingOlderMessages={isLoadingOlderMessages}
         />
       </div>
 

@@ -79,7 +79,10 @@ export default function ChatThread({
   quickReplies = DEFAULT_QUICK_REPLIES,
   onOpenQuickRepliesModal,
   onOpenVietQRModal,
-  onOpenAutoRulesModal
+  onOpenAutoRulesModal,
+  onLoadOlderMessages,
+  hasMoreOlderMessages,
+  isLoadingOlderMessages
 }) {
   const [replyText, setReplyText] = useState('');
   const [replyMode, setReplyMode] = useState('messenger');
@@ -90,9 +93,15 @@ export default function ChatThread({
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
+  const prevLengthRef = useRef(messages.length);
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
-  }, [messages]);
+    // Only auto-scroll to bottom on first load or when sending/receiving new message at bottom
+    if (messages.length > prevLengthRef.current && !isLoadingOlderMessages) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    }
+    prevLengthRef.current = messages.length;
+  }, [messages, isLoadingOlderMessages]);
 
   const handleFileChange = (e) => {
     const file = e.target.files[0];
@@ -292,7 +301,32 @@ export default function ChatThread({
             <p className="text-xs text-slate-400 mt-1">Bắt đầu trò chuyện với khách hàng ở khung bên dưới</p>
           </div>
         ) : (
-          messages.map((msg, idx) => {
+          <>
+            {/* Load Older Messages Button (Yesterday, Last Week, etc.) */}
+            {hasMoreOlderMessages && (
+              <div className="flex justify-center py-2">
+                <button
+                  type="button"
+                  onClick={onLoadOlderMessages}
+                  disabled={isLoadingOlderMessages}
+                  className="px-3.5 py-1.5 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold border border-slate-200 dark:border-slate-700 transition-smooth shadow-xs flex items-center gap-1.5 active:scale-95"
+                >
+                  {isLoadingOlderMessages ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin"></div>
+                      <span>Đang tải tin nhắn cũ...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Clock className="w-3.5 h-3.5 text-brand-500" />
+                      <span>Tải tin nhắn cũ hơn (Hôm qua, Tuần trước)</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {messages.map((msg, idx) => {
             const isFromPage = msg.from?.id === conversation.page_id;
             const prevMsg = messages[idx - 1];
             const nextMsg = messages[idx + 1];
@@ -464,9 +498,10 @@ export default function ChatThread({
                 </div>
               </React.Fragment>
             );
-          })
-        )}
-        <div ref={messagesEndRef} />
+          })}
+        </>
+      )}
+      <div ref={messagesEndRef} />
       </div>
 
       {/* Bottom Reply Area (Sleek Compact iOS-style) */}
