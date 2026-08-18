@@ -225,17 +225,20 @@ export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitc
       localStorage.setItem('metapost_inbox_cache', JSON.stringify(combined));
       localStorage.setItem(`metapost_inbox_cache_${storedPageId}`, JSON.stringify(combined));
 
-      // Restore active conversation from localStorage on load/F5
-      const savedActiveId = localStorage.getItem('metapost_active_conv_id');
-      if (savedActiveId) {
-        const matched = combined.find(c => c.fb_conversation_id === savedActiveId);
-        if (matched) {
-          handleSelectConversation(matched);
-        } else if (combined.length > 0 && window.innerWidth >= 768) {
-          handleSelectConversation(combined[0]);
+      // Restore active conversation from localStorage on load/F5 (ONLY for Desktop 2-pane view, NEVER auto-open on mobile)
+      const isDesktop = window.innerWidth >= 768;
+      if (isDesktop) {
+        const savedActiveId = localStorage.getItem('metapost_active_conv_id');
+        if (savedActiveId) {
+          const matched = combined.find(c => c.fb_conversation_id === savedActiveId);
+          if (matched) {
+            handleSelectConversation(matched, false);
+          } else if (combined.length > 0) {
+            handleSelectConversation(combined[0], false);
+          }
+        } else if (!activeConversation && combined.length > 0) {
+          handleSelectConversation(combined[0], false);
         }
-      } else if (!activeConversation && combined.length > 0 && window.innerWidth >= 768) {
-        handleSelectConversation(combined[0]);
       }
     } catch (err) {
       console.error('Fetch all conversations error:', err);
@@ -315,7 +318,7 @@ function playChimeSound() {
 }
 
   // 4. Select Conversation with Instant SWR Cache
-  const handleSelectConversation = async (conv) => {
+  const handleSelectConversation = async (conv, shouldSwitchMobileView = true) => {
     // Merge persistent labels before setting active conversation
     const savedLabels = JSON.parse(
       localStorage.getItem(`metapost_labels_${conv.fb_conversation_id}`) ||
@@ -329,7 +332,9 @@ function playChimeSound() {
 
     setActiveConversation(convWithLabels);
     localStorage.setItem('metapost_active_conv_id', conv.fb_conversation_id);
-    setMobileView('chat'); // Switch view on mobile to chat
+    if (shouldSwitchMobileView) {
+      setMobileView('chat'); // Switch view on mobile to chat ONLY on explicit tap
+    }
 
     // ⚡ INSTANT SWR CACHE: Render previously cached messages in 0.01s
     try {
@@ -756,7 +761,7 @@ function playChimeSound() {
           }}
           conversations={conversations}
           activeConversation={activeConversation}
-          onSelectConversation={handleSelectConversation}
+          onSelectConversation={(conv) => handleSelectConversation(conv, true)}
           channelFilter={channelFilter}
           onChannelFilterChange={setChannelFilter}
           statusFilter={statusFilter}
@@ -790,7 +795,10 @@ function playChimeSound() {
           onToggleStar={handleToggleStar}
           onToggleUnread={handleToggleUnread}
           onOpenMediaModal={setActiveMediaModal}
-          onBackToList={() => setMobileView('list')}
+          onBackToList={() => {
+            setMobileView('list');
+            localStorage.removeItem('metapost_active_conv_id');
+          }}
           onToggleProfilePanel={() => setIsProfilePanelOpenOnMobile(!isProfilePanelOpenOnMobile)}
           quickReplies={quickReplies}
           onOpenQuickRepliesModal={() => setIsQuickRepliesOpen(true)}
