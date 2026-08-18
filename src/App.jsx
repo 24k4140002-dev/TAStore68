@@ -94,67 +94,67 @@ export default function App() {
 
   return (
     <div className="h-full h-[100dvh] w-full flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden font-sans fixed inset-0">
-      {/* Top Main Navigation Header (Auto-hidden on Mobile, Collapsible on Desktop via Focus Mode) */}
-      <header className={`${isFocusMode ? 'hidden' : 'hidden md:flex'} h-[56px] flex-shrink-0 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 px-3 sm:px-4 lg:px-6 items-center justify-between z-30`}>
-        {/* Left: Brand Logo & Version */}
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 text-white flex items-center justify-center font-black shadow-md shadow-brand-500/20 text-xs tracking-tighter">
+      {/* Top Main Navigation Header (Always accessible across Mobile & Desktop) */}
+      <header className={`${isFocusMode ? 'hidden' : 'flex'} h-[48px] sm:h-[56px] flex-shrink-0 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 px-2.5 sm:px-4 lg:px-6 items-center justify-between z-30`}>
+        {/* Left: Brand Logo & Module Tabs */}
+        <div className="flex items-center gap-2 sm:gap-4 lg:gap-6">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 text-white flex items-center justify-center font-black shadow-md shadow-brand-500/20 text-[11px] sm:text-xs tracking-tighter">
               TA68
             </div>
-            <div>
+            <div className="hidden sm:block">
               <div className="flex items-center gap-1.5">
                 <span className="font-extrabold text-sm tracking-tight text-slate-900 dark:text-white">TAStore68</span>
                 <span className="px-1.5 py-0.2 rounded-md bg-brand-50 dark:bg-brand-950 text-brand-600 dark:text-brand-400 font-extrabold text-[10px] uppercase tracking-wider border border-brand-200/50 dark:border-brand-800/50">
                   Pro
                 </span>
               </div>
-              <p className="text-[10px] text-slate-400 font-medium hidden sm:block">
-                Quản lý Messenger & Đăng bài đa Fanpage
-              </p>
             </div>
           </div>
 
-          {/* Module Switcher Tabs */}
-          <nav className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+          {/* Module Switcher Tabs (Accessible on ALL devices) */}
+          <nav className="flex items-center gap-0.5 sm:gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
             <button
               onClick={() => setActiveTab('inbox')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-smooth ${
+              className={`px-2.5 sm:px-3.5 py-1 sm:py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition-smooth ${
                 activeTab === 'inbox'
                   ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-xs'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <MessageSquare className="w-3.5 h-3.5 text-blue-500" />
-              <span>CRM Inbox Pro</span>
+              <MessageSquare className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
+              <span className="hidden sm:inline">CRM Inbox Pro</span>
+              <span className="sm:hidden">Inbox</span>
             </button>
             <button
               onClick={() => setActiveTab('post')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-smooth ${
+              className={`px-2.5 sm:px-3.5 py-1 sm:py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition-smooth ${
                 activeTab === 'post'
                   ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-xs'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <Send className="w-3.5 h-3.5 text-emerald-500" />
-              <span>Đăng Bài Đa Page</span>
+              <Send className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+              <span className="hidden sm:inline">Đăng Bài Đa Page</span>
+              <span className="sm:hidden">Đăng bài</span>
             </button>
             <button
               onClick={() => setActiveTab('ads')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-smooth ${
+              className={`px-2.5 sm:px-3.5 py-1 sm:py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 sm:gap-1.5 transition-smooth ${
                 activeTab === 'ads'
                   ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-xs'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <TrendingUp className="w-3.5 h-3.5 text-purple-500" />
-              <span>Báo Cáo Ads</span>
+              <TrendingUp className="w-3.5 h-3.5 text-purple-500 flex-shrink-0" />
+              <span className="hidden sm:inline">Báo Cáo Ads</span>
+              <span className="sm:hidden">Ads</span>
             </button>
           </nav>
         </div>
 
         {/* Right Controls */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           {/* Online status indicator */}
           <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60 text-[11px] font-bold">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
@@ -164,7 +164,7 @@ export default function App() {
           {/* Token Config button */}
           <button
             onClick={() => setIsTokenModalOpen(true)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition-smooth ${
+            className={`p-1.5 sm:px-3 sm:py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition-smooth ${
               fbToken
                 ? 'bg-slate-50 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100'
                 : 'bg-amber-500 text-white border-amber-600 animate-bounce'
@@ -172,13 +172,13 @@ export default function App() {
             title="Quản lý Facebook Token"
           >
             <Key className="w-3.5 h-3.5 text-amber-500" />
-            <span className="hidden sm:inline">{fbToken ? 'Token Đã Kết Nối' : 'Nhập Token FB'}</span>
+            <span className="hidden md:inline">{fbToken ? 'Token Đã Kết Nối' : 'Nhập Token FB'}</span>
           </button>
 
-          {/* Focus Mode Toggle */}
+          {/* Focus Mode Toggle (Desktop only) */}
           <button
             onClick={toggleFocusMode}
-            className="p-2 rounded-xl text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth"
+            className="hidden md:flex p-2 rounded-xl text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth"
             title="Chế độ tập trung (Thu gọn menu)"
           >
             <Maximize2 className="w-4 h-4" />
@@ -187,10 +187,10 @@ export default function App() {
           {/* Theme Toggle */}
           <button
             onClick={toggleTheme}
-            className="p-2 rounded-xl text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth"
+            className="p-1.5 sm:p-2 rounded-xl text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth"
             title="Đổi giao diện Sáng / Tối"
           >
-            {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-600" />}
+            {theme === 'dark' ? <Sun className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400" /> : <Moon className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-600" />}
           </button>
         </div>
       </header>
@@ -199,7 +199,7 @@ export default function App() {
       {isFocusMode && (
         <button
           onClick={toggleFocusMode}
-          className="fixed top-3 right-3 z-50 px-3 py-1.5 rounded-xl bg-white/90 dark:bg-slate-900/90 backdrop-blur border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-brand-500 shadow-md transition-smooth hidden md:flex items-center gap-1.5 text-xs font-bold cursor-pointer animate-in fade-in"
+          className="fixed top-3 right-3 z-50 px-3 py-1.5 rounded-xl bg-white/90 dark:bg-slate-900/90 backdrop-blur border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-brand-500 shadow-md transition-smooth flex items-center gap-1.5 text-xs font-bold cursor-pointer animate-in fade-in"
           title="Hiện lại thanh menu"
         >
           <Minimize2 className="w-3.5 h-3.5" />
