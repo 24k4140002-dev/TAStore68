@@ -1,0 +1,731 @@
+const GRAPH_API_VERSION = 'v19.0';
+const API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+
+// Strip invisible characters, smart quotes, zero-width spaces, and newlines (common on iOS)
+export function cleanFacebookToken(token) {
+  if (!token) return '';
+  return String(token)
+    .replace(/["'”’‘“]/g, '')
+    .replace(/[\u200B-\u200D\uFEFF\u00A0\r\n\t\s]/g, '')
+    .trim();
+}
+
+export async function safeFetch(url, options = {}, timeoutMs = 20000) {
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    let json;
+    try {
+      json = await res.json();
+    } catch {
+      throw new Error(`Phản hồi không hợp lệ từ Facebook (${res.status})`);
+    }
+    if (!res.ok || json?.error) {
+      let msg = json?.error?.message || `HTTP ${res.status}: ${res.statusText}`;
+      const code = json?.error?.code;
+      if (code === 4 || code === 17 || code === 32 || code === 613 || String(msg).toLowerCase().includes('limit reach')) {
+        msg = 'Facebook đang giới hạn số lượt yêu cầu trong chốc lát (Rate limit #4). Vui lòng đợi 1-2 phút rồi thử lại.';
+      }
+      const err = new Error(msg);
+      err.code = code;
+      throw err;
+    }
+    return json;
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Kết nối Facebook quá chậm. Kiểm tra mạng.');
+    throw e;
+  } finally {
+    clearTimeout(tid);
+  }
+}
+
+// Utility to run async tasks in throttled chunks to prevent Facebook rate limiting
+export async function runInChunks(items, fn, chunkSize = 3, delayMs = 120) {
+  const results = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    const res = await Promise.allSettled(chunk.map(fn));
+    results.push(...res);
+    if (i + chunkSize < items.length && delayMs > 0) {
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  return results;
+}
+
+export function getInitials(name) {
+  if (!name) return 'KH';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+export function getAvatarColor(name) {
+  const colors = [
+    '#1877f2', '#0d9488', '#8b5cf6', '#d97706',
+    '#db2777', '#0284c7', '#4f46e5', '#16a34a'
+  ];
+  let hash = 0;
+  for (let i = 0; i < (name || '').length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  return colors[Math.abs(hash) % colors.length];
+}
+
+export function isSticker(att, msg = null) {
+  if (msg?.sticker || msg?.is_sticker || att?.is_sticker) return true;
+  
+  const url = typeof att === 'string' ? att : (att?.image_data?.url || att?.file_url || '');
+  if (!url) return false;
+  
+  const lower = url.toLowerCase();
+  
+  // Facebook Sticker CDN paths and query patterns
+  if (
+    lower.includes('t39.1997-') ||     // Facebook Sticker CDN prefix
+    lower.includes('t39.20818-') ||   // Facebook Animated Sticker CDN prefix
+    lower.includes('t39.2365-') ||    // Facebook Sticker Pack prefix
+    lower.includes('t39.2147-') ||
+    lower.includes('t39.2081-') ||
+    lower.includes('/stickers/') ||
+    lower.includes('/sticker/') ||
+    lower.includes('sticker_id') ||
+    lower.includes('rsrc.php') ||
+    lower.includes('/emojis/') ||
+    lower.includes('static.xx.fbcdn.net') ||
+    lower.includes('platform-lookaside.fbsbx.com/platform/stickers') ||
+    lower.includes('lookaside.fbsbx.com') ||
+    lower.includes('dst-png_s') ||
+    (typeof att === 'object' && att?.image_data?.render_as_sticker) ||
+    (typeof att === 'object' && att?.name && att.name.toLowerCase().includes('sticker'))
+  ) {
+    return true;
+  }
+  
+  // If message has no text and attachment is square png
+  if (msg && !msg.message && typeof att === 'object' && att?.image_data) {
+    const { width, height } = att.image_data;
+    if (width && height && width === height && width <= 480 && att.mime_type === 'image/png') {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+export function formatTimeAgo(dateStr) {
+  if (!dateStr) return '';
+  const now = new Date();
+  const d = new Date(dateStr);
+  const diff = Math.floor((now - d) / 1000);
+  if (diff < 60) return 'Vừa xong';
+  if (diff < 3600) return `${Math.floor(diff / 60)} phút trước`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} giờ trước`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)} ngày trước`;
+  return d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
+}
+
+export function formatDateTime(dateStr) {
+  if (!dateStr) return '—';
+  return new Date(dateStr).toLocaleString('vi-VN', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+}
+
+// Helper: Format Likes count (e.g. 1062 -> '1.062 Like', 15200 -> '15.2k Like')
+export function formatLikesCount(count) {
+  if (count === undefined || count === null || isNaN(count)) return '';
+  const num = Number(count);
+  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M Like`;
+  if (num >= 10000) return `${(num / 1000).toFixed(1)}k Like`;
+  return `${num.toLocaleString('vi-VN')} Like`;
+}
+
+// Helper: Get Distinct Display Name for a Page (handling duplicate names via nickname, exact like count, or ID)
+export function getPageDisplayName(pageOrPageId, allPages = [], nicknames = {}) {
+  if (!pageOrPageId) return '';
+  const page = typeof pageOrPageId === 'object' ? pageOrPageId : allPages.find(p => p.id === pageOrPageId);
+  if (!page) return typeof pageOrPageId === 'string' ? pageOrPageId : '';
+
+  const customNick = nicknames[page.id];
+  if (customNick) {
+    return `${customNick} (${page.name})`;
+  }
+
+  // Prioritize fan_count (Lượt Thích) over followers_count (Lượt Theo Dõi)
+  const exactLikes = page.fan_count !== undefined && page.fan_count !== null
+    ? page.fan_count
+    : page.followers_count;
+
+  const likeStr = formatLikesCount(exactLikes);
+
+  if (likeStr) {
+    return `${page.name} (${likeStr})`;
+  }
+
+  if (page.username) {
+    return `${page.name} (@${page.username})`;
+  }
+
+  // If duplicate name exists with other pages and no like count yet, append last 4 digits of Page ID
+  const duplicate = allPages.filter(p => p.name === page.name).length > 1;
+  if (duplicate && page.id) {
+    return `${page.name} (ID ...${page.id.slice(-4)})`;
+  }
+
+  return page.name;
+}
+
+// Fetch exact fan_count / followers_count from Page node for duplicate-named pages
+export async function enrichPagesWithLikes(pages, fbToken) {
+  if (!pages || pages.length === 0) return pages;
+
+  // Find duplicate named pages or pages missing fan_count
+  const nameCounts = {};
+  pages.forEach(p => {
+    nameCounts[p.name] = (nameCounts[p.name] || 0) + 1;
+  });
+
+  const duplicatePages = pages.filter(p => nameCounts[p.name] > 1 || p.fan_count === undefined);
+
+  if (duplicatePages.length === 0) return pages;
+
+  const enrichedMap = {};
+  await runInChunks(duplicatePages, async (page) => {
+    const token = page.access_token || fbToken;
+    try {
+      const res = await safeFetch(
+        `${API_BASE}/${page.id}?fields=fan_count,followers_count,username&access_token=${encodeURIComponent(token)}`
+      );
+      if (res) {
+        enrichedMap[page.id] = {
+          fan_count: res.fan_count,
+          followers_count: res.followers_count,
+          username: res.username || page.username
+        };
+      }
+    } catch (e) {
+      console.warn(`Fetch likes failed for page ${page.name}:`, e.message);
+    }
+  }, 3, 100);
+
+  return pages.map(p => {
+    if (enrichedMap[p.id]) {
+      return { ...p, ...enrichedMap[p.id] };
+    }
+    return p;
+  });
+}
+
+// Fetch all managed pages with access tokens, pictures, fan count & username
+export async function fetchPages(fbToken) {
+  const cleanToken = (fbToken || '').trim();
+  if (!cleanToken) return [];
+  const res = await safeFetch(
+    `${API_BASE}/me/accounts?fields=id,name,category,access_token,picture{data{url}},tasks&limit=100&access_token=${encodeURIComponent(cleanToken)}`
+  );
+  const rawPages = res.data || [];
+  if (rawPages.length === 0) return [];
+
+  // Automatically enrich duplicate-named pages with real fan_count from Facebook
+  const enriched = await enrichPagesWithLikes(rawPages, cleanToken);
+  return enriched;
+}
+
+// Fetch conversations for a specific page with participant avatars, snippet & Meta custom labels
+export async function fetchPageConversations(pageId, pageName, pageToken) {
+  if (!pageId || !pageToken) return [];
+  try {
+    const res = await safeFetch(
+      `${API_BASE}/${pageId}/conversations?fields=id,updated_time,unread_count,custom_labels{id,name,page_label_name},participants{id,name,picture{data{url}}},can_reply,messages.limit(1){id,message,created_time,from,attachments{mime_type,file_url,image_data}}&limit=30&access_token=${encodeURIComponent(pageToken)}`
+    );
+
+    if (!res.data) return [];
+
+    // Load local read map
+    let readMap = {};
+    try {
+      readMap = JSON.parse(localStorage.getItem('metapost_read_map') || '{}');
+    } catch {}
+
+    return res.data.map(conv => {
+      const participants = conv.participants?.data || [];
+      const customer = participants.find(p => p.id !== pageId);
+      const lastMsg = conv.messages?.data?.[0];
+      const customerPsid = customer?.id || '';
+      const avatarUrl = customer?.picture?.data?.url || (customerPsid && pageToken
+        ? `${API_BASE}/${customerPsid}/picture?type=square&height=100&width=100&access_token=${encodeURIComponent(pageToken)}`
+        : '');
+
+      // Parse Meta native custom labels from Graph API
+      const fbCustomLabels = (conv.custom_labels?.data || []).map(l => ({
+        id: l.id,
+        name: l.name || l.page_label_name,
+        emoji: '🏷️',
+        color: '#3b82f6'
+      }));
+
+      // Unread logic:
+      // 1. If user previously viewed this conversation (in readMap), check if a NEW message arrived after read timestamp
+      // 2. Otherwise, trust Facebook Graph API's conv.unread_count
+      const readUntil = readMap[conv.id];
+      const msgTime = conv.updated_time || lastMsg?.created_time;
+      let effectiveUnread = conv.unread_count || 0;
+
+      if (readUntil && msgTime) {
+        if (new Date(msgTime).getTime() <= new Date(readUntil).getTime()) {
+          effectiveUnread = 0; // Already read
+        } else {
+          effectiveUnread = effectiveUnread > 0 ? effectiveUnread : 1; // New message after read
+        }
+      }
+
+      return {
+        id: conv.id,
+        fb_conversation_id: conv.id,
+        page_id: pageId,
+        page_name: pageName,
+        page_token: pageToken,
+        conversation_type: 'messenger',
+        customer_psid: customerPsid,
+        customer_name: customer?.name || 'Khách hàng',
+        avatar_url: avatarUrl,
+        snippet: lastMsg?.message || (lastMsg?.attachments ? '📷 [Hình ảnh/Tệp]' : '...'),
+        last_message_at: conv.updated_time,
+        can_reply: conv.can_reply !== false,
+        last_sender_id: lastMsg?.from?.id,
+        status: 'open',
+        is_starred: false,
+        unread_count: effectiveUnread,
+        labels: fbCustomLabels,
+        reply_deadline: lastMsg?.created_time
+          ? new Date(new Date(lastMsg.created_time).getTime() + 24 * 3600 * 1000).toISOString()
+          : null
+      };
+    });
+  } catch (err) {
+    console.warn(`Fetch conversations failed for ${pageName}:`, err.message);
+    return [];
+  }
+}
+
+// Quick scan: fetch unread summary across ALL pages (lightweight, only counts)
+export async function fetchAllPagesUnreadSummary(allPages, fbToken) {
+  if (!allPages || allPages.length === 0) return { total: 0, perPage: [] };
+
+  // Load read tracking from localStorage
+  let readMap = {};
+  try {
+    readMap = JSON.parse(localStorage.getItem('metapost_read_map') || '{}');
+  } catch {}
+
+  const results = await runInChunks(allPages, async (page) => {
+    const token = page.access_token || fbToken;
+    try {
+      const res = await safeFetch(
+        `${API_BASE}/${page.id}/conversations?fields=id,updated_time,unread_count&limit=30&access_token=${encodeURIComponent(token)}`
+      );
+      const convs = res.data || [];
+      let unread = 0;
+      convs.forEach(c => {
+        const readUntil = readMap[c.id];
+        let isConvUnread = (c.unread_count || 0) > 0;
+        if (readUntil && c.updated_time) {
+          if (new Date(c.updated_time).getTime() <= new Date(readUntil).getTime()) {
+            isConvUnread = false; // Already read
+          } else {
+            isConvUnread = true; // New message arrived
+          }
+        }
+        if (isConvUnread) unread++;
+      });
+      return {
+        pageId: page.id,
+        pageName: page.name,
+        pagePicture: page.picture?.data?.url || null,
+        unreadCount: unread,
+        totalConversations: convs.length
+      };
+    } catch (e) {
+      return { pageId: page.id, pageName: page.name, pagePicture: null, unreadCount: 0, totalConversations: 0 };
+    }
+  }, 3, 100);
+
+  const perPage = results
+    .filter(r => r.status === 'fulfilled')
+    .map(r => r.value);
+
+  const total = perPage.reduce((sum, p) => sum + p.unreadCount, 0);
+  return { total, perPage };
+}
+
+// Fetch messages for a conversation
+export async function fetchConversationMessages(conversationId, pageToken) {
+  if (!conversationId || !pageToken) return [];
+  const res = await safeFetch(
+    `${API_BASE}/${conversationId}/messages?fields=id,created_time,from,message,attachments{id,mime_type,name,size,file_url,image_data},sticker&limit=100&access_token=${encodeURIComponent(pageToken)}`
+  );
+  const msgs = (res.data || []).reverse();
+  msgs.forEach(msg => {
+    if (msg.sticker) {
+      msg.is_sticker = true;
+      if (msg.attachments?.data) {
+        msg.attachments.data.forEach(a => { a.is_sticker = true; });
+      }
+    }
+  });
+  return msgs;
+}
+
+// Send Messenger message
+export async function sendMessengerMessage(psid, messageText, pageToken, file = null) {
+  if (!psid || !pageToken) throw new Error('Thiếu thông tin người nhận hoặc token');
+
+  if (file) {
+    const formData = new FormData();
+    formData.append('recipient', JSON.stringify({ id: psid }));
+    formData.append('message', JSON.stringify({
+      attachment: {
+        type: file.type.startsWith('image/') ? 'image' : 'file',
+        payload: { is_reusable: true }
+      }
+    }));
+    formData.append('filedata', file);
+
+    return safeFetch(`${API_BASE}/me/messages?access_token=${encodeURIComponent(pageToken)}`, {
+      method: 'POST',
+      body: formData
+    });
+  }
+
+  return safeFetch(`${API_BASE}/me/messages?access_token=${encodeURIComponent(pageToken)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      recipient: { id: psid },
+      messaging_type: 'RESPONSE',
+      message: { text: messageText }
+    })
+  });
+}
+
+// Send comment reply
+export async function sendCommentReply(commentId, messageText, pageToken) {
+  return safeFetch(`${API_BASE}/${commentId}/comments?access_token=${encodeURIComponent(pageToken)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: messageText })
+  });
+}
+
+// Send private reply from comment
+export async function sendPrivateReply(commentId, messageText, pageToken) {
+  return safeFetch(`${API_BASE}/${commentId}/private_replies?access_token=${encodeURIComponent(pageToken)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: messageText })
+  });
+}
+
+// ----------------------------------------------------
+// FACEBOOK PAGE CUSTOM LABELS API (Meta Business Suite Sync)
+// ----------------------------------------------------
+
+export function getEmojiForLabel(name = '') {
+  const lower = name.toLowerCase();
+  if (lower.includes('đặt') || lower.includes('chốt') || lower.includes('order')) return '✅';
+  if (lower.includes('tiềm năng') || lower.includes('lead')) return '⭐';
+  if (lower.includes('tư vấn') || lower.includes('chat')) return '💬';
+  if (lower.includes('follow') || lower.includes('gọi')) return '📞';
+  if (lower.includes('vip')) return '👑';
+  if (lower.includes('xử lý')) return '⚙️';
+  if (lower.includes('hủy') || lower.includes('cancel')) return '❌';
+  if (lower.includes('thanh toán') || lower.includes('tiền')) return '💰';
+  if (lower.includes('giao') || lower.includes('ship')) return '🚚';
+  return '🏷️';
+}
+
+export function getColorForLabel(name = '') {
+  const lower = name.toLowerCase();
+  if (lower.includes('đặt') || lower.includes('chốt')) return '#10b981'; // Emerald/Green
+  if (lower.includes('tiềm năng')) return '#f59e0b'; // Amber
+  if (lower.includes('tư vấn')) return '#3b82f6'; // Blue
+  if (lower.includes('follow') || lower.includes('gọi')) return '#8b5cf6'; // Purple
+  if (lower.includes('vip')) return '#ec4899'; // Pink
+  if (lower.includes('xử lý')) return '#ea580c'; // Orange
+  if (lower.includes('hủy')) return '#ef4444'; // Red
+  if (lower.includes('thanh toán')) return '#06b6d4'; // Cyan
+  return '#64748b'; // Slate
+}
+
+// Fetch custom labels from Facebook Page along with users that have them
+export async function fetchPageLabelsWithUsers(pageId, pageToken) {
+  if (!pageId || !pageToken) return { labels: [], userLabelsMap: {} };
+  try {
+    const res = await safeFetch(
+      `${API_BASE}/${pageId}/custom_labels?fields=id,name,page_label_name,users&limit=50&access_token=${encodeURIComponent(pageToken)}`
+    );
+    const labels = [];
+    const userLabelsMap = {};
+
+    (res.data || []).forEach(l => {
+      const name = l.name || l.page_label_name || 'Nhãn';
+      const labelObj = {
+        id: l.id,
+        name: name,
+        emoji: getEmojiForLabel(name),
+        color: getColorForLabel(name)
+      };
+      labels.push(labelObj);
+
+      const users = l.users?.data || [];
+      users.forEach(u => {
+        if (!userLabelsMap[u.id]) userLabelsMap[u.id] = [];
+        userLabelsMap[u.id].push(labelObj);
+      });
+    });
+
+    return { labels, userLabelsMap };
+  } catch (e) {
+    console.warn('Fetch page labels with users error:', e.message);
+    return { labels: [], userLabelsMap: {} };
+  }
+}
+
+// Fetch custom labels from Facebook Page
+export async function fetchPageLabels(pageId, pageToken) {
+  const result = await fetchPageLabelsWithUsers(pageId, pageToken);
+  return result.labels;
+}
+
+// Create new custom label on Facebook Page
+export async function createPageLabel(pageId, pageToken, labelName) {
+  if (!pageId || !pageToken || !labelName) return null;
+  try {
+    const res = await safeFetch(
+      `${API_BASE}/${pageId}/custom_labels?name=${encodeURIComponent(labelName)}&access_token=${encodeURIComponent(pageToken)}`,
+      { method: 'POST' }
+    );
+    return res;
+  } catch (e) {
+    console.warn('Create page label error:', e.message);
+    throw e;
+  }
+}
+
+// Assign label to customer (PSID) on Facebook Page
+export async function assignLabelToUser(labelId, userPsid, pageToken) {
+  if (!labelId || !userPsid || !pageToken) return false;
+  try {
+    await safeFetch(
+      `${API_BASE}/${labelId}/users?user=${encodeURIComponent(userPsid)}&access_token=${encodeURIComponent(pageToken)}`,
+      { method: 'POST' }
+    );
+    return true;
+  } catch (e) {
+    console.warn('Assign label to user error:', e.message);
+    return false;
+  }
+}
+
+// Unassign label from customer (PSID) on Facebook Page
+export async function unassignLabelFromUser(labelId, userPsid, pageToken) {
+  if (!labelId || !userPsid || !pageToken) return false;
+  try {
+    await safeFetch(
+      `${API_BASE}/${labelId}/users?user=${encodeURIComponent(userPsid)}&access_token=${encodeURIComponent(pageToken)}`,
+      { method: 'DELETE' }
+    );
+    return true;
+  } catch (e) {
+    console.warn('Unassign label from user error:', e.message);
+    return false;
+  }
+}
+
+// Smart helper: Ensure label exists on Facebook Page and assign to customer (PSID)
+export async function syncAssignPageLabel(pageId, pageToken, label, userPsid) {
+  if (!pageId || !pageToken || !label) return label;
+  try {
+    let targetLabelId = label.id;
+
+    // If ID is not a real Facebook numeric ID (e.g. meta_ordered), look up or create on FB Page
+    if (!targetLabelId || targetLabelId.startsWith('meta_') || isNaN(Number(targetLabelId))) {
+      const existingLabels = await fetchPageLabels(pageId, pageToken);
+      const match = existingLabels.find(l => l.name.toLowerCase().trim() === label.name.toLowerCase().trim());
+      if (match) {
+        targetLabelId = match.id;
+      } else {
+        const created = await createPageLabel(pageId, pageToken, label.name);
+        if (created?.id) {
+          targetLabelId = created.id;
+        }
+      }
+    }
+
+    // Now assign the real Facebook label to user
+    if (targetLabelId && userPsid && !targetLabelId.startsWith('meta_')) {
+      await assignLabelToUser(targetLabelId, userPsid, pageToken);
+    }
+
+    return { ...label, id: targetLabelId || label.id };
+  } catch (e) {
+    console.warn('syncAssignPageLabel error:', e.message);
+    return label;
+  }
+}
+
+// Smart helper: Unassign label from customer (PSID) on Facebook Page
+export async function syncUnassignPageLabel(pageId, pageToken, labelIdOrName, userPsid) {
+  if (!pageId || !pageToken || !userPsid) return;
+  try {
+    let targetLabelId = labelIdOrName;
+    if (typeof labelIdOrName === 'string' && (labelIdOrName.startsWith('meta_') || isNaN(Number(labelIdOrName)))) {
+      const existingLabels = await fetchPageLabels(pageId, pageToken);
+      const match = existingLabels.find(l => l.id === labelIdOrName || l.name.toLowerCase().trim() === labelIdOrName.toLowerCase().trim());
+      if (match) targetLabelId = match.id;
+    }
+    if (targetLabelId && !String(targetLabelId).startsWith('meta_')) {
+      await unassignLabelFromUser(targetLabelId, userPsid, pageToken);
+    }
+  } catch (e) {
+    console.warn('syncUnassignPageLabel error:', e.message);
+  }
+}
+
+// Exchange short-lived token for long-lived permanent token using App ID + App Secret
+export async function exchangePermanentToken(appId, appSecret, shortToken) {
+  const cleanAppId = (appId || '').trim();
+  const cleanSecret = (appSecret || '').trim();
+  const cleanShort = (shortToken || '').trim();
+
+  if (!cleanAppId || !cleanSecret || !cleanShort) {
+    throw new Error('Vui lòng nhập đủ App ID, App Secret và Token ngắn hạn');
+  }
+
+  const exchangeUrl = `${API_BASE}/oauth/access_token?grant_type=fb_exchange_token&client_id=${encodeURIComponent(cleanAppId)}&client_secret=${encodeURIComponent(cleanSecret)}&fb_exchange_token=${encodeURIComponent(cleanShort)}`;
+  const res = await safeFetch(exchangeUrl);
+
+  if (!res?.access_token) {
+    throw new Error('Facebook không trả về Access Token hợp lệ.');
+  }
+
+  // Save App credentials
+  localStorage.setItem('metapost_app_id', cleanAppId);
+  localStorage.setItem('metapost_app_secret', cleanSecret);
+
+  return res.access_token;
+}
+
+// Fetch assigned custom labels for a specific customer (PSID)
+export async function fetchUserLabels(userPsid, pageToken) {
+  if (!userPsid || !pageToken) return [];
+  try {
+    const res = await safeFetch(
+      `${API_BASE}/${userPsid}/custom_labels?fields=id,name,page_label_name&access_token=${encodeURIComponent(pageToken)}`
+    );
+    return (res.data || []).map(l => ({
+      id: l.id,
+      name: l.name || l.page_label_name,
+      emoji: '🏷️',
+      color: '#3b82f6'
+    }));
+  } catch (e) {
+    return [];
+  }
+}
+
+// Hide a Facebook Comment (e.g. comment containing customer phone number)
+export async function hideComment(commentId, pageToken) {
+  if (!commentId || !pageToken) return;
+  return safeFetch(
+    `${API_BASE}/${commentId}?is_hidden=true&access_token=${encodeURIComponent(pageToken)}`,
+    { method: 'POST' }
+  );
+}
+
+// List of popular Vietnamese Banks for VietQR
+export const VIETQR_BANKS = [
+  { code: 'MB', name: 'MBBank (Quân Đội)', bin: '970422' },
+  { code: 'VCB', name: 'Vietcombank', bin: '970436' },
+  { code: 'TCB', name: 'Techcombank', bin: '970407' },
+  { code: 'ACB', name: 'ACB', bin: '970416' },
+  { code: 'VPB', name: 'VPBank', bin: '970432' },
+  { code: 'TPB', name: 'TPBank', bin: '970423' },
+  { code: 'CTG', name: 'VietinBank', bin: '970415' },
+  { code: 'BIDV', name: 'BIDV', bin: '970418' },
+  { code: 'STB', name: 'Sacombank', bin: '970403' },
+  { code: 'OCB', name: 'OCB', bin: '970448' },
+  { code: 'MSB', name: 'MSB', bin: '970426' },
+  { code: 'VIB', name: 'VIB', bin: '970441' },
+  { code: 'VBA', name: 'Agribank', bin: '970405' },
+  { code: 'CAKE', name: 'CAKE by VPBank', bin: '546034' },
+  { code: 'TIMO', name: 'Timo by BVBank', bin: '963388' }
+];
+
+// Generate standard VietQR Image URL
+export function generateVietQRUrl({ bankCode, accountNo, accountName, amount, memo }) {
+  const cleanBank = (bankCode || 'MB').trim();
+  const cleanAcc = (accountNo || '').trim();
+  const cleanName = encodeURIComponent((accountName || '').trim());
+  const cleanMemo = encodeURIComponent((memo || 'TAStore68 chuyen khoan').trim());
+  const cleanAmount = parseInt(amount, 10) || 0;
+
+  return `https://img.vietqr.io/image/${cleanBank}-${cleanAcc}-compact.png?amount=${cleanAmount}&addInfo=${cleanMemo}&accountName=${cleanName}`;
+}
+
+// Default Quick Reply Templates for Sports & Fashion Stores
+export const DEFAULT_QUICK_REPLIES = [
+  {
+    id: 'qr_size',
+    shortcut: '/size',
+    title: '👕 Bảng tư vấn chọn size',
+    text: `Dạ shop gửi bạn bảng size chuẩn form thể thao bên shop ạ:
+• Size S: 45kg - 55kg (Cao 1m50 - 1m62)
+• Size M: 56kg - 65kg (Cao 1m63 - 1m70)
+• Size L: 66kg - 75kg (Cao 1m70 - 1m77)
+• Size XL: 76kg - 85kg (Cao 1m77 - 1m84)
+• Size XXL: 86kg - 95kg (Cao trên 1m80)
+
+Bạn cho shop xin Chiều cao & Cân nặng để shop lấy size vừa vặn nhất cho bạn nhé! ✨`
+  },
+  {
+    id: 'qr_stk',
+    shortcut: '/stk',
+    title: '💳 Thông tin chuyển khoản (STK)',
+    text: `Dạ bạn chuyển khoản thanh toán qua STK shop nhé:
+🏦 Ngân hàng: MB Bank
+🔢 Số tài khoản: [Số tài khoản của bạn]
+👤 Chủ tài khoản: [Tên chủ tài khoản]
+📝 Nội dung: [Tên bạn hoặc SĐT]
+
+Chuyển xong bạn chụp lại bill gửi shop để shop đóng gói gửi đi ngay nhé! Cảm ơn bạn nhiều ạ 🥰`
+  },
+  {
+    id: 'qr_in',
+    shortcut: '/in',
+    title: '🖨️ Bảng giá in tên số & logo',
+    text: `Dạ bên shop có hỗ trợ in tên số theo yêu cầu bằng công nghệ Decal PU thể thao cao cấp chống bong tróc:
+• In Tên + Số áo: +30k / áo
+• In Logo ngực / Logo tay / Nhà tài trợ: +15k - 20k / vị trí
+• Thời gian in lấy ngay trong ngày.
+
+Bạn muốn in Tên & Số gì nhắn shop lên demo cho bạn xem trước nha! ⚽🔥`
+  },
+  {
+    id: 'qr_ship',
+    shortcut: '/ship',
+    title: '🚚 Thời gian & Phí giao hàng',
+    text: `Dạ shop gửi hàng toàn quốc:
+• Phí ship đồng giá: 25k (Miễn phí ship khi mua từ 2 bộ / đơn từ 300k).
+• Nội tỉnh / lân cận: 1 - 2 ngày nhận hàng.
+• Các tỉnh khác: 2 - 3 ngày nhận hàng.
+• Khách được kiểm tra hàng trước khi thanh toán thoải mái ạ! 📦`
+  },
+  {
+    id: 'qr_camon',
+    shortcut: '/camon',
+    title: '🎉 Cảm ơn đã chốt đơn',
+    text: `Shop đã ghi nhận đơn hàng của bạn thành công! Đơn sẽ được kiểm tra kỹ và gửi đi sớm nhất. Khi nhận được hàng bạn mặc thử có bất kỳ vấn đề gì cứ nhắn shop hỗ trợ đổi size miễn phí nhé. Chúc bạn một ngày tràn đầy năng lượng! ❤️`
+  }
+];

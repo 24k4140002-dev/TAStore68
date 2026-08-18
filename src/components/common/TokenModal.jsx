@@ -1,0 +1,371 @@
+import React, { useState } from 'react';
+import { X, Key, ShieldCheck, Check, Sparkles, Zap, AlertCircle, CheckCircle2, QrCode, Smartphone, Copy } from 'lucide-react';
+import { exchangePermanentToken, fetchPages, cleanFacebookToken } from '../../services/facebookApi';
+
+export default function TokenModal({ currentToken, onClose, onSave }) {
+  const [tab, setTab] = useState('direct'); // 'direct' | 'upgrade' | 'mobile_qr'
+  const [tokenInput, setTokenInput] = useState(currentToken || '');
+  
+  // App ID & Secret state
+  const [appId, setAppId] = useState(() => localStorage.getItem('metapost_app_id') || '');
+  const [appSecret, setAppSecret] = useState(() => localStorage.getItem('metapost_app_secret') || '');
+  const [shortToken, setShortToken] = useState('');
+  
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [isCopiedLink, setIsCopiedLink] = useState(false);
+
+  // Generate Mobile Quick Sync URL
+  const getMobileSyncUrl = () => {
+    const activeToken = currentToken || tokenInput;
+    if (!activeToken) return '';
+    const origin = window.location.origin;
+    return `${origin}/#sync_token=${encodeURIComponent(activeToken)}`;
+  };
+
+  const mobileSyncUrl = getMobileSyncUrl();
+
+  const handleCopySyncLink = () => {
+    if (!mobileSyncUrl) return;
+    navigator.clipboard.writeText(mobileSyncUrl);
+    setIsCopiedLink(true);
+    setTimeout(() => setIsCopiedLink(false), 2000);
+  };
+
+  const handleDirectSave = async (e) => {
+    e.preventDefault();
+    setErrorMessage('');
+    setSuccessMessage('');
+    const clean = cleanFacebookToken(tokenInput);
+    if (!clean) {
+      setErrorMessage('Vui lòng dán Access Token vào ô bên dưới');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const pages = await fetchPages(clean);
+      if (!pages || pages.length === 0) {
+        setErrorMessage('Token không có quyền quản trị Fanpage nào hoặc đã hết hạn.');
+        return;
+      }
+      setSuccessMessage(`🎉 Đã kết nối thành công ${pages.length} Fanpage!`);
+      setTimeout(() => {
+        onSave(clean, pages);
+        onClose();
+      }, 700);
+    } catch (err) {
+      if (err.message?.includes('190') || err.message?.includes('expired') || err.message?.includes('Session')) {
+        setErrorMessage('⚠️ Token của bạn đã HẾT HẠN (Facebook Error #190: Session Expired). Vui lòng lấy Token mới từ Graph API Explorer hoặc dùng Tab "Đổi Token Vĩnh Viễn".');
+      } else {
+        setErrorMessage(`Lỗi xác thực Facebook: ${err.message}`);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleUpgradePermanent = async (e) => {
+    e.preventDefault();
+    setErrorMessage('');
+    setSuccessMessage('');
+    const cleanId = cleanFacebookToken(appId);
+    const cleanSec = cleanFacebookToken(appSecret);
+    const cleanShort = cleanFacebookToken(shortToken);
+
+    if (!cleanId || !cleanSec || !cleanShort) {
+      setErrorMessage('Vui lòng điền đủ App ID, App Secret và Token ngắn hạn');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const permanentToken = await exchangePermanentToken(cleanId, cleanSec, cleanShort);
+      const pages = await fetchPages(permanentToken);
+      setSuccessMessage(`🎉 Nâng cấp vĩnh viễn thành công! Đã nạp ${pages.length} Fanpage.`);
+      setTimeout(() => {
+        onSave(permanentToken, pages);
+        onClose();
+      }, 700);
+    } catch (err) {
+      setErrorMessage(`Lỗi nâng cấp Token: ${err.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 flex items-center justify-center font-bold">
+              <Key className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-900 dark:text-white text-base">Cấu Hình Facebook Token</h3>
+              <p className="text-xs text-slate-500">Kết nối Fanpage để quản lý Chat & Đăng bài</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-smooth"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Mode Switcher Tabs */}
+        <div className="px-6 pt-4 flex-shrink-0">
+          <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs font-semibold">
+            <button
+              type="button"
+              onClick={() => setTab('direct')}
+              className={`py-2 rounded-lg text-center transition-all flex items-center justify-center gap-1 ${
+                tab === 'direct'
+                  ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-sm font-bold'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+              }`}
+            >
+              <Key className="w-3.5 h-3.5" />
+              <span>Dán Token</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab('upgrade')}
+              className={`py-2 rounded-lg text-center transition-all flex items-center justify-center gap-1 ${
+                tab === 'upgrade'
+                  ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-sm font-bold'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-500" />
+              <span>Đổi Vĩnh Viễn</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab('mobile_qr')}
+              className={`py-2 rounded-lg text-center transition-all flex items-center justify-center gap-1 ${
+                tab === 'mobile_qr'
+                  ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-white shadow-sm font-bold'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+              }`}
+            >
+              <QrCode className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Quét QR Mobile</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Tab Content Body */}
+        <div className="flex-1 overflow-y-auto">
+          {/* Tab 1: Direct Token Paste */}
+          {tab === 'direct' && (
+            <form onSubmit={handleDirectSave} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Access Token (Bắt đầu bằng EAA...) *
+                </label>
+                <textarea
+                  rows="4"
+                  required
+                  placeholder="Dán token Facebook của bạn vào đây..."
+                  value={tokenInput}
+                  onChange={(e) => setTokenInput(e.target.value)}
+                  className="w-full p-3 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-500 focus:outline-none transition-smooth resize-none break-all"
+                ></textarea>
+              </div>
+
+              {errorMessage && (
+                <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 flex items-start gap-2 text-red-700 dark:text-red-300 text-xs">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>{errorMessage}</span>
+                </div>
+              )}
+
+              {successMessage && (
+                <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 flex items-start gap-2 text-emerald-700 dark:text-emerald-300 text-xs">
+                  <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>{successMessage}</span>
+                </div>
+              )}
+
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60 flex items-start gap-2 text-slate-600 dark:text-slate-400 text-xs">
+                <ShieldCheck className="w-4 h-4 flex-shrink-0 mt-0.5 text-emerald-500" />
+                <span>Token được lưu an toàn trực tiếp trên trình duyệt của bạn (LocalStorage).</span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-2.5 text-xs font-semibold rounded-xl text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Huỷ
+                </button>
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="px-5 py-2.5 text-xs font-bold rounded-xl bg-brand-500 hover:bg-brand-600 text-white shadow-md shadow-brand-500/20 flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isLoading ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      <span>Đang kết nối Facebook...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>Lưu & Kích Hoạt</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Tab 2: Permanent Token Generator (App ID + App Secret + Short Token) */}
+          {tab === 'upgrade' && (
+            <form onSubmit={handleUpgradePermanent} className="p-6 space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Facebook App ID *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ví dụ: 123456789012345"
+                  value={appId}
+                  onChange={(e) => setAppId(e.target.value)}
+                  className="w-full p-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-500 focus:outline-none transition-smooth"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Facebook App Secret *
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Nhập App Secret từ Meta for Developers"
+                  value={appSecret}
+                  onChange={(e) => setAppSecret(e.target.value)}
+                  className="w-full p-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-500 focus:outline-none transition-smooth"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Token Ngắn Hạn (User Token từ Graph API Explorer) *
+                </label>
+                <textarea
+                  rows="2"
+                  required
+                  placeholder="Dán token ngắn hạn EAA... vào đây để đổi sang Vĩnh Viễn"
+                  value={shortToken}
+                  onChange={(e) => setShortToken(e.target.value)}
+                  className="w-full p-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-500 focus:outline-none transition-smooth resize-none break-all"
+                ></textarea>
+              </div>
+
+              {errorMessage && (
+                <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 flex items-start gap-2 text-red-700 dark:text-red-300 text-xs">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>{errorMessage}</span>
+                </div>
+              )}
+
+              {successMessage && (
+                <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 flex items-start gap-2 text-emerald-700 dark:text-emerald-300 text-xs">
+                  <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>{successMessage}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-2.5 text-xs font-semibold rounded-xl text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Huỷ
+                </button>
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="px-5 py-2.5 text-xs font-bold rounded-xl bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/20 flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isLoading ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      <span>Đang đổi token...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-4 h-4" />
+                      <span>Nâng Cấp & Kích Hoạt Vĩnh Viễn</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Tab 3: Mobile QR Code Quick Sync */}
+          {tab === 'mobile_qr' && (
+            <div className="p-6 space-y-4 flex flex-col items-center text-center">
+              <div className="flex items-center gap-2 text-emerald-600 font-bold text-sm">
+                <Smartphone className="w-5 h-5" />
+                <span>Đồng Bộ Sang Điện Thoại Không Cần Nhập Token</span>
+              </div>
+              <p className="text-xs text-slate-500 max-w-sm">
+                Mở ứng dụng <strong>Camera</strong> hoặc <strong>Zalo</strong> trên điện thoại, hướng vào mã QR bên dưới để tự động đăng nhập!
+              </p>
+
+              {mobileSyncUrl ? (
+                <div className="p-4 bg-white rounded-2xl shadow-lg border border-slate-200 flex flex-col items-center">
+                  <img
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(mobileSyncUrl)}`}
+                    alt="Scan to login on mobile"
+                    className="w-48 h-48 rounded-xl object-contain"
+                  />
+                  <span className="text-[11px] text-slate-400 font-medium mt-2">
+                    Quét mã để kích hoạt 14 Fanpage trên Mobile
+                  </span>
+                </div>
+              ) : (
+                <div className="p-6 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-700 text-xs">
+                  Vui lòng lưu Token trên máy tính trước để tạo mã QR đồng bộ sang điện thoại.
+                </div>
+              )}
+
+              {mobileSyncUrl && (
+                <div className="w-full flex items-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleCopySyncLink}
+                    className="flex-1 py-2.5 px-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center justify-center gap-1.5 transition-smooth"
+                  >
+                    {isCopiedLink ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+                    <span>{isCopiedLink ? 'Đã sao chép liên kết!' : 'Sao chép link gửi qua Zalo'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="px-5 py-2.5 text-xs font-bold rounded-xl bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900"
+                  >
+                    Đóng
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+

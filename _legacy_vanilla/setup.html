@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MetaPost Studio — Supabase Auto Setup</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    :root {
+      --brand: #1877f2;
+      --success: #10b981;
+      --error: #ef4444;
+      --warning: #f59e0b;
+      --bg: #f1f5f9;
+      --surface: #fff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --radius: 12px;
+      --font: 'Plus Jakarta Sans', sans-serif;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 2.5rem 2rem; width: 100%; max-width: 600px; box-shadow: 0 20px 40px rgba(0,0,0,0.08); }
+    .header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
+    .logo { width: 52px; height: 52px; background: linear-gradient(135deg, #1877f2, #0052cc); border-radius: 14px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 1.5rem; }
+    h1 { font-size: 1.4rem; font-weight: 800; letter-spacing: -0.02em; }
+    p.sub { font-size: 0.875rem; color: var(--muted); margin-top: 0.15rem; }
+    .steps { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: 1.5rem; }
+    .step { display: flex; align-items: center; gap: 0.875rem; padding: 0.875rem 1rem; border-bottom: 1px solid var(--border); transition: background 0.15s; }
+    .step:last-child { border-bottom: none; }
+    .step-num { width: 28px; height: 28px; border-radius: 50%; background: #f1f5f9; border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 700; flex-shrink: 0; transition: all 0.3s; }
+    .step.running .step-num { background: var(--brand); border-color: var(--brand); color: #fff; animation: spin 1s linear infinite; }
+    .step.done .step-num { background: var(--success); border-color: var(--success); color: #fff; }
+    .step.error .step-num { background: var(--error); border-color: var(--error); color: #fff; }
+    .step.skip .step-num { background: var(--warning); border-color: var(--warning); color: #fff; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    .step-label { font-size: 0.875rem; flex: 1; }
+    .step-label strong { display: block; font-weight: 700; }
+    .step-label small { color: var(--muted); font-size: 0.78rem; }
+    .step-status { font-size: 0.75rem; font-weight: 600; }
+    .step.done .step-status { color: var(--success); }
+    .step.error .step-status { color: var(--error); }
+    .step.skip .step-status { color: var(--warning); }
+    .step.running .step-status { color: var(--brand); }
+    .progress-bar-wrap { background: var(--border); border-radius: 20px; height: 6px; margin-bottom: 1rem; overflow: hidden; }
+    .progress-bar { height: 100%; background: linear-gradient(90deg, var(--brand), var(--success)); border-radius: 20px; width: 0%; transition: width 0.5s ease; }
+    .log-box { background: #0f172a; color: #94a3b8; font-family: monospace; font-size: 0.78rem; padding: 1rem; border-radius: var(--radius); max-height: 180px; overflow-y: auto; margin-bottom: 1.5rem; }
+    .log-box .log-success { color: #34d399; }
+    .log-box .log-error   { color: #f87171; }
+    .log-box .log-info    { color: #60a5fa; }
+    .log-box .log-warn    { color: #fbbf24; }
+    .result-card { border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1.5rem; display: none; }
+    .result-card.success { background: #ecfdf5; border: 1px solid #a7f3d0; }
+    .result-card.error   { background: #fef2f2; border: 1px solid #fca5a5; }
+    .result-card h3 { font-size: 1rem; font-weight: 700; margin-bottom: 0.5rem; }
+    .result-card.success h3 { color: #065f46; }
+    .result-card.error   h3 { color: #991b1b; }
+    .result-card p { font-size: 0.875rem; color: var(--muted); }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; padding: 0.75rem 1.5rem; border-radius: var(--radius); font-size: 0.875rem; font-weight: 700; font-family: inherit; cursor: pointer; border: none; text-decoration: none; transition: all 0.18s; }
+    .btn-primary { background: var(--brand); color: #fff; box-shadow: 0 4px 12px rgba(24,119,242,0.25); }
+    .btn-primary:hover:not(:disabled) { background: #166fe5; transform: translateY(-1px); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-success { background: var(--success); color: #fff; }
+    .btn-success:hover { background: #059669; transform: translateY(-1px); }
+    .btn-block { width: 100%; }
+    .btn-row { display: flex; gap: 0.75rem; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="header">
+    <div class="logo">🗄️</div>
+    <div>
+      <h1>Supabase Auto Setup</h1>
+      <p class="sub">MetaPost Studio — CRM Inbox Database</p>
+    </div>
+  </div>
+
+  <div class="progress-bar-wrap">
+    <div class="progress-bar" id="progressBar"></div>
+  </div>
+
+  <div class="steps" id="stepsList">
+    <div class="step" id="step0">
+      <div class="step-num">1</div>
+      <div class="step-label"><strong>Kết nối Supabase</strong><small>Khởi tạo client với credentials</small></div>
+      <span class="step-status" id="status0">Chờ...</span>
+    </div>
+    <div class="step" id="step1">
+      <div class="step-num">2</div>
+      <div class="step-label"><strong>Tạo bảng campaigns</strong><small>Theo dõi nguồn Ads/Organic</small></div>
+      <span class="step-status" id="status1">Chờ...</span>
+    </div>
+    <div class="step" id="step2">
+      <div class="step-num">3</div>
+      <div class="step-label"><strong>Tạo bảng customers</strong><small>Hồ sơ khách hàng + PSID</small></div>
+      <span class="step-status" id="status2">Chờ...</span>
+    </div>
+    <div class="step" id="step3">
+      <div class="step-num">4</div>
+      <div class="step-label"><strong>Tạo bảng conversations</strong><small>Hội thoại Messenger & Comment</small></div>
+      <span class="step-status" id="status3">Chờ...</span>
+    </div>
+    <div class="step" id="step4">
+      <div class="step-num">5</div>
+      <div class="step-label"><strong>Tạo bảng messages</strong><small>Cache tin nhắn</small></div>
+      <span class="step-status" id="status4">Chờ...</span>
+    </div>
+    <div class="step" id="step5">
+      <div class="step-num">6</div>
+      <div class="step-label"><strong>Tạo Labels & Tags</strong><small>Nhãn, thẻ phân loại</small></div>
+      <span class="step-status" id="status5">Chờ...</span>
+    </div>
+    <div class="step" id="step6">
+      <div class="step-num">7</div>
+      <div class="step-label"><strong>Tạo bảng notes</strong><small>Ghi chú nội bộ</small></div>
+      <span class="step-status" id="status6">Chờ...</span>
+    </div>
+    <div class="step" id="step7">
+      <div class="step-num">8</div>
+      <div class="step-label"><strong>Seed dữ liệu mặc định</strong><small>Labels: Tiềm năng, Đã chốt... / Tags mặc định</small></div>
+      <span class="step-status" id="status7">Chờ...</span>
+    </div>
+    <div class="step" id="step8">
+      <div class="step-num">9</div>
+      <div class="step-label"><strong>Kiểm tra tổng thể</strong><small>Verify tất cả tables</small></div>
+      <span class="step-status" id="status8">Chờ...</span>
+    </div>
+  </div>
+
+  <div class="log-box" id="logBox">
+    <div>⏳ Chờ bắt đầu...</div>
+  </div>
+
+  <div class="result-card" id="resultCard">
+    <h3 id="resultTitle"></h3>
+    <p id="resultMsg"></p>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-primary btn-block" id="btnStart" onclick="startSetup()">
+      🚀 Bắt đầu Setup Database
+    </button>
+    <a href="inbox.html" class="btn btn-success" id="btnOpenInbox" style="display:none; flex-shrink:0;">
+      💬 Mở CRM Inbox
+    </a>
+  </div>
+</div>
+
+<script>
+  // ============================================================
+  // PRE-CONFIGURED CREDENTIALS
+  // ============================================================
+  const SUPABASE_URL = 'https://svhrdnugpjocumycqddm.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN2aHJkbnVncGpvY3VteWNxZGRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY5NTczMDYsImV4cCI6MjEwMjUzMzMwNn0.-JC8UwzrUK0eNHCnHCqsL9yAyiernrhU74v9xWFJDxU';
+
+  let db = null;
+  let currentStep = 0;
+  const totalSteps = 9;
+
+  function log(msg, type = '') {
+    const box = document.getElementById('logBox');
+    const div = document.createElement('div');
+    div.className = type ? `log-${type}` : '';
+    div.textContent = `[${new Date().toLocaleTimeString('vi-VN')}] ${msg}`;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function setStep(idx, state, statusText) {
+    const step = document.getElementById(`step${idx}`);
+    const status = document.getElementById(`status${idx}`);
+    step.className = `step ${state}`;
+    status.textContent = statusText;
+    const prog = Math.round(((idx + 1) / totalSteps) * 100);
+    document.getElementById('progressBar').style.width = prog + '%';
+  }
+
+  async function runStep(idx, label, fn) {
+    setStep(idx, 'running', 'Đang chạy...');
+    log(`▶ ${label}`, 'info');
+    try {
+      const result = await fn();
+      if (result && result.skipped) {
+        setStep(idx, 'skip', '⚠ Đã có sẵn');
+        log(`  ⚠ ${label}: Đã tồn tại (bỏ qua)`, 'warn');
+      } else {
+        setStep(idx, 'done', '✅ Xong');
+        log(`  ✅ ${label}: Thành công`, 'success');
+      }
+    } catch (err) {
+      const msg = err?.message || String(err);
+      if (msg.includes('already exists') || msg.includes('42P07') || msg.includes('23505')) {
+        setStep(idx, 'skip', '⚠ Đã có sẵn');
+        log(`  ⚠ ${label}: Đã tồn tại (bỏ qua)`, 'warn');
+      } else {
+        setStep(idx, 'error', '❌ Lỗi');
+        log(`  ❌ ${label}: ${msg}`, 'error');
+        throw err;
+      }
+    }
+  }
+
+  // Insert via Supabase JS client (works without DDL permission)
+  async function upsertTable(table, rows, conflict) {
+    const { error } = await db.from(table).upsert(rows, { onConflict: conflict, ignoreDuplicates: true });
+    if (error && !error.message.includes('already exists')) throw error;
+  }
+
+  async function startSetup() {
+    document.getElementById('btnStart').disabled = true;
+    document.getElementById('btnStart').textContent = '⏳ Đang chạy...';
+    document.getElementById('logBox').innerHTML = '';
+    document.getElementById('resultCard').style.display = 'none';
+
+    log('Bắt đầu MetaPost Studio CRM Inbox Database Setup...', 'info');
+    log(`Project: ${SUPABASE_URL}`, 'info');
+
+    try {
+      // STEP 0: Connect
+      await runStep(0, 'Kết nối Supabase', async () => {
+        db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        // Test ping
+        const { error } = await db.from('labels').select('id').limit(1);
+        if (!error) return { skipped: true }; // Tables already exist!
+        if (error.code === '42P01') return; // Table not found = need to create
+        // Other errors = still proceed
+      });
+
+      // Check if already setup
+      const { data: testLabels, error: testErr } = await db.from('labels').select('id').limit(1);
+      if (!testErr) {
+        // Tables exist!
+        log('🎉 Database đã được setup trước đó!', 'success');
+        for (let i = 1; i < totalSteps; i++) setStep(i, 'skip', '✅ Đã có');
+        document.getElementById('progressBar').style.width = '100%';
+        showSuccess();
+        return;
+      }
+
+      // STEP 1-7: Create tables via Supabase SQL function workaround
+      // Since we can't do DDL via REST, we'll use the RPC if available
+      // or guide user to the SQL editor with pre-filled content
+      log('⚠ Cần quyền DDL để tạo tables. Thử các phương thức...', 'warn');
+
+      // Try using Supabase's built-in SQL execute
+      const sqlStatements = [
+        {
+          step: 1, name: 'campaigns table',
+          sql: `CREATE TABLE IF NOT EXISTS campaigns (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL, ad_id TEXT, source TEXT DEFAULT 'ADS', description TEXT, status TEXT DEFAULT 'active', created_at TIMESTAMPTZ DEFAULT now());`
+        },
+        {
+          step: 2, name: 'customers table',
+          sql: `CREATE TABLE IF NOT EXISTS customers (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), psid TEXT UNIQUE NOT NULL, page_id TEXT NOT NULL, first_name TEXT, last_name TEXT, profile_pic TEXT, phone TEXT, email TEXT, locale TEXT, source TEXT DEFAULT 'organic', ad_id TEXT, campaign_id UUID, notes_count INT DEFAULT 0, created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now());`
+        },
+        {
+          step: 3, name: 'conversations table',
+          sql: `CREATE TABLE IF NOT EXISTS conversations (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), fb_conversation_id TEXT UNIQUE NOT NULL, customer_id UUID, campaign_id UUID, page_id TEXT NOT NULL, page_name TEXT, conversation_type TEXT DEFAULT 'messenger', snippet TEXT, unread_count INT DEFAULT 0, status TEXT DEFAULT 'open', can_reply BOOLEAN DEFAULT true, reply_deadline TIMESTAMPTZ, last_message_at TIMESTAMPTZ DEFAULT now(), created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now());`
+        },
+        {
+          step: 4, name: 'messages table',
+          sql: `CREATE TABLE IF NOT EXISTS messages (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), conversation_id UUID, fb_message_id TEXT UNIQUE NOT NULL, sender_type TEXT NOT NULL, sender_id TEXT NOT NULL, sender_name TEXT, message_text TEXT, attachments JSONB DEFAULT '[]'::jsonb, is_read BOOLEAN DEFAULT false, created_at TIMESTAMPTZ DEFAULT now());`
+        },
+        {
+          step: 5, name: 'labels & tags tables',
+          sql: `CREATE TABLE IF NOT EXISTS labels (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL UNIQUE, color TEXT DEFAULT '#3B82F6', emoji TEXT DEFAULT '🏷️', sort_order INT DEFAULT 0, created_at TIMESTAMPTZ DEFAULT now()); CREATE TABLE IF NOT EXISTS conversation_labels (conversation_id UUID, label_id UUID, created_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY (conversation_id, label_id)); CREATE TABLE IF NOT EXISTS tags (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL UNIQUE, color TEXT DEFAULT '#10B981', created_at TIMESTAMPTZ DEFAULT now()); CREATE TABLE IF NOT EXISTS customer_tags (customer_id UUID, tag_id UUID, created_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY (customer_id, tag_id));`
+        },
+        {
+          step: 6, name: 'notes table',
+          sql: `CREATE TABLE IF NOT EXISTS notes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), customer_id UUID, conversation_id UUID, author_name TEXT NOT NULL DEFAULT 'Admin', content TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now());`
+        }
+      ];
+
+      let ddlSuccess = false;
+      // Try exec_sql RPC (might be custom function)
+      for (const item of sqlStatements) {
+        await runStep(item.step, item.name, async () => {
+          const { error } = await db.rpc('exec_sql', { sql: item.sql });
+          if (error) throw error;
+          ddlSuccess = true;
+        });
+      }
+
+      // STEP 7: Seed default labels & tags
+      await runStep(7, 'Seed dữ liệu Labels & Tags', async () => {
+        await upsertTable('labels', [
+          { name: 'Tiềm năng', color: '#F59E0B', emoji: '🌟', sort_order: 1 },
+          { name: 'Đã chốt đơn', color: '#10B981', emoji: '✅', sort_order: 2 },
+          { name: 'Cần follow-up', color: '#3B82F6', emoji: '🔔', sort_order: 3 },
+          { name: 'Khách VIP', color: '#8B5CF6', emoji: '👑', sort_order: 4 },
+          { name: 'Đang xử lý', color: '#F97316', emoji: '⚙️', sort_order: 5 },
+          { name: 'Đã huỷ đơn', color: '#EF4444', emoji: '❌', sort_order: 6 },
+          { name: 'Hỏi thêm', color: '#64748B', emoji: '💬', sort_order: 7 }
+        ], 'name');
+        await upsertTable('tags', [
+          { name: 'Sản phẩm mới', color: '#06B6D4' },
+          { name: 'Khuyến mãi', color: '#F59E0B' },
+          { name: 'Quảng cáo', color: '#8B5CF6' },
+          { name: 'Organic', color: '#10B981' },
+          { name: 'Tái mua', color: '#3B82F6' }
+        ], 'name');
+      });
+
+      // STEP 8: Verify
+      await runStep(8, 'Kiểm tra tổng thể', async () => {
+        const checks = ['labels', 'tags', 'customers', 'conversations', 'messages', 'notes'];
+        for (const t of checks) {
+          const { error } = await db.from(t).select('id').limit(1);
+          if (error) throw new Error(`Bảng ${t} không tồn tại: ${error.message}`);
+          log(`  ✓ Bảng ${t}: OK`, 'success');
+        }
+      });
+
+      showSuccess();
+
+    } catch (err) {
+      // DDL via RPC failed — guide to SQL editor
+      log('', '');
+      log('ℹ️  Không thể tự động tạo tables (cần Personal Access Token cho DDL).', 'warn');
+      log('📋 Bạn chỉ cần chạy SQL 1 lần trong Supabase Dashboard!', 'info');
+      showSQLGuide();
+    }
+  }
+
+  function showSuccess() {
+    // Save to localStorage so inbox.html auto-connects
+    localStorage.setItem('inbox_supabase_url', SUPABASE_URL);
+    localStorage.setItem('inbox_supabase_key', SUPABASE_ANON_KEY);
+
+    const card = document.getElementById('resultCard');
+    card.className = 'result-card success';
+    card.style.display = 'block';
+    document.getElementById('resultTitle').textContent = '🎉 Setup hoàn thành!';
+    document.getElementById('resultMsg').textContent = 'Database đã sẵn sàng. Bấm "Mở CRM Inbox" để sử dụng ngay!';
+
+    document.getElementById('btnStart').style.display = 'none';
+    document.getElementById('btnOpenInbox').style.display = 'inline-flex';
+
+    log('', '');
+    log('🎉 SETUP HOÀN THÀNH! Credentials đã được lưu vào localStorage.', 'success');
+    log('▶ Bấm "Mở CRM Inbox" để bắt đầu quản lý tin nhắn!', 'success');
+  }
+
+  function showSQLGuide() {
+    const card = document.getElementById('resultCard');
+    card.className = 'result-card error';
+    card.style.display = 'block';
+    document.getElementById('resultTitle').textContent = '📋 Cần chạy SQL thủ công (1 lần duy nhất)';
+    document.getElementById('resultMsg').innerHTML = `
+      <strong>3 bước đơn giản:</strong><br>
+      1. Mở: <a href="https://supabase.com/dashboard/project/svhrdnugpjocumycqddm/sql/new" target="_blank" style="color:#1877f2">Supabase SQL Editor ↗</a><br>
+      2. Paste toàn bộ nội dung file <strong>db-setup.sql</strong><br>
+      3. Bấm <strong>RUN</strong> → Sau đó quay lại và bấm "Thử lại"
+    `;
+    document.getElementById('btnStart').disabled = false;
+    document.getElementById('btnStart').textContent = '🔄 Thử lại sau khi đã chạy SQL';
+
+    // Auto-open SQL editor
+    setTimeout(() => window.open('https://supabase.com/dashboard/project/svhrdnugpjocumycqddm/sql/new', '_blank'), 1000);
+  }
+</script>
+</body>
+</html>

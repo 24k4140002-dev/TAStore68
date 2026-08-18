@@ -1,0 +1,10 @@
+node_modules
+.env
+*.ps1
+run-setup.js
+fix-labels.js
+setup-supabase.ps1
+db-setup.sql
+server.js
+_legacy_vanilla
+*.log
