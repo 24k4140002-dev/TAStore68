@@ -95,28 +95,17 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
   const [isVietQROpen, setIsVietQROpen] = useState(false);
   const [isAutoRulesOpen, setIsAutoRulesOpen] = useState(false);
 
-  // 1. Load Meta & Page Labels
-  const loadLabelsAndTags = async () => {
+  // 1. Load Meta & Page Labels (from localStorage & defaults)
+  const loadLabelsAndTags = () => {
     try {
-      let labels = [...DEFAULT_META_LABELS];
-      const cachedPages = JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]');
-      const targetPageId = localStorage.getItem('metapost_selected_page_id') || selectedPageId;
-      const targetPage = targetPageId === 'all' ? cachedPages[0] : (cachedPages.find(p => p.id === targetPageId) || cachedPages[0]);
-      if (targetPage && targetPage.access_token) {
-        const { labels: fbLabels } = await fetchPageLabelsWithUsers(targetPage.id, targetPage.access_token);
-        if (fbLabels && fbLabels.length > 0) {
-          const existingNames = new Set(labels.map(l => l.name.toLowerCase().trim()));
-          fbLabels.forEach(fl => {
-            if (!existingNames.has(fl.name.toLowerCase().trim())) {
-              labels.push(fl);
-            }
-          });
-        }
+      const savedLabels = JSON.parse(localStorage.getItem('metapost_all_labels') || '[]');
+      if (savedLabels && savedLabels.length > 0) {
+        setAllLabels(savedLabels);
+      } else {
+        setAllLabels(DEFAULT_META_LABELS);
+        localStorage.setItem('metapost_all_labels', JSON.stringify(DEFAULT_META_LABELS));
       }
-      setAllLabels(labels);
-      localStorage.setItem('metapost_all_labels', JSON.stringify(labels));
-    } catch (e) {
-      console.warn('Error loading labels:', e.message);
+    } catch {
       setAllLabels(DEFAULT_META_LABELS);
     }
   };
@@ -137,7 +126,7 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
     return [];
   }, [fbToken]);
 
-  // 3. Fetch All Conversations in Parallel
+  // 3. Fetch All Conversations in Parallel (Throttled to avoid Rate Limit #4)
   const loadAllConversations = useCallback(async (currentPages = pages) => {
     if (!fbToken || currentPages.length === 0) return;
     setIsLoadingConversations(true);
@@ -148,12 +137,12 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
         ? currentPages
         : currentPages.filter(p => p.id === storedPageId);
 
-      // Fetch conversations in throttled batches (2 pages per batch, 150ms delay) to prevent Facebook Rate Limit #4
+      // Fetch conversations in throttled batches (2 pages per batch, 200ms delay) to prevent Facebook Rate Limit #4
       const results = await runInChunks(
         targetPages,
         page => fetchPageConversations(page.id, page.name, page.access_token || fbToken),
         2,
-        150
+        200
       );
 
       const combined = [];
@@ -162,25 +151,6 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
           combined.push(...res.value);
         }
       });
-
-      // Fetch Page Custom Labels only for target pages with throttling
-      const userLabelsFromFB = {};
-      try {
-        const pagesToFetchLabels = storedPageId === 'all' ? targetPages.slice(0, 4) : targetPages;
-        const labelResults = await runInChunks(
-          pagesToFetchLabels,
-          page => fetchPageLabelsWithUsers(page.id, page.access_token || fbToken),
-          2,
-          150
-        );
-        labelResults.forEach(res => {
-          if (res.status === 'fulfilled' && res.value?.userLabelsMap) {
-            Object.assign(userLabelsFromFB, res.value.userLabelsMap);
-          }
-        });
-      } catch (e) {
-        console.warn('Load FB page labels error:', e);
-      }
 
       // Apply read tracking and persistent labels
       const currentReadMap = getReadMap();

@@ -238,42 +238,52 @@ export function getPageDisplayName(pageOrPageId, allPages = [], nicknames = {}) 
   return page.name;
 }
 
-// Fetch exact fan_count / followers_count from Page node for duplicate-named pages
+// Fetch exact fan_count / followers_count from Page node for duplicate-named pages (cached)
 export async function enrichPagesWithLikes(pages, fbToken) {
   if (!pages || pages.length === 0) return pages;
 
-  // Find duplicate named pages or pages missing fan_count
+  let likesCache = {};
+  try {
+    likesCache = JSON.parse(localStorage.getItem('metapost_page_likes_cache') || '{}');
+  } catch {}
+
+  // Find duplicate named pages or pages missing fan_count and not in cache
   const nameCounts = {};
   pages.forEach(p => {
     nameCounts[p.name] = (nameCounts[p.name] || 0) + 1;
   });
 
-  const duplicatePages = pages.filter(p => nameCounts[p.name] > 1 || p.fan_count === undefined);
+  const duplicatePages = pages.filter(p =>
+    (nameCounts[p.name] > 1 || p.fan_count === undefined) && !likesCache[p.id]
+  );
 
-  if (duplicatePages.length === 0) return pages;
-
-  const enrichedMap = {};
-  await runInChunks(duplicatePages, async (page) => {
-    const token = page.access_token || fbToken;
-    try {
-      const res = await safeFetch(
-        `${API_BASE}/${page.id}?fields=fan_count,followers_count,username&access_token=${encodeURIComponent(token)}`
-      );
-      if (res) {
-        enrichedMap[page.id] = {
-          fan_count: res.fan_count,
-          followers_count: res.followers_count,
-          username: res.username || page.username
-        };
+  if (duplicatePages.length > 0) {
+    await runInChunks(duplicatePages, async (page) => {
+      const token = page.access_token || fbToken;
+      try {
+        const res = await safeFetch(
+          `${API_BASE}/${page.id}?fields=fan_count,followers_count,username&access_token=${encodeURIComponent(token)}`
+        );
+        if (res) {
+          likesCache[page.id] = {
+            fan_count: res.fan_count,
+            followers_count: res.followers_count,
+            username: res.username || page.username
+          };
+        }
+      } catch {
+        // Silently continue without logging
       }
-    } catch (e) {
-      console.warn(`Fetch likes failed for page ${page.name}:`, e.message);
-    }
-  }, 3, 100);
+    }, 2, 150);
+
+    try {
+      localStorage.setItem('metapost_page_likes_cache', JSON.stringify(likesCache));
+    } catch {}
+  }
 
   return pages.map(p => {
-    if (enrichedMap[p.id]) {
-      return { ...p, ...enrichedMap[p.id] };
+    if (likesCache[p.id]) {
+      return { ...p, ...likesCache[p.id] };
     }
     return p;
   });
