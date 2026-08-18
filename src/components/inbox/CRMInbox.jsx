@@ -650,7 +650,7 @@ function playChimeSound() {
   }, []);
 
   return (
-    <div className="flex-1 flex overflow-hidden h-[calc(100vh-61px)] relative">
+    <div className="flex-1 flex overflow-hidden h-full h-[calc(100dvh-60px)] relative">
       {/* 1. Left Sidebar: Channels & Filtered Conversations (hidden on mobile if chat is open) */}
       <div className={`w-full md:w-80 lg:w-96 flex-shrink-0 flex flex-col ${mobileView === 'chat' ? 'hidden md:flex' : 'flex'}`}>
         {/* Global Unread Dashboard Banner */}

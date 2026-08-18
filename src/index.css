@@ -7,6 +7,15 @@
     --brand-primary: #1877f2;
   }
   
+  html, body, #root {
+    height: 100%;
+    height: 100dvh;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: touch;
+    -webkit-tap-highlight-color: transparent;
+  }
+
   html {
     font-size: 15px;
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
@@ -23,10 +32,30 @@
     padding-bottom: env(safe-area-inset-bottom, 0);
   }
 
+  /* Prevent iOS Safari 115% auto-zoom on input focus */
+  @media screen and (max-width: 768px) {
+    input, textarea, select {
+      font-size: 16px !important;
+    }
+  }
+
   .dark body {
     color: #f8fafc;
     background-color: #090d16;
   }
+}
+
+/* Touch-optimized scroll classes for iOS */
+.touch-scroll-x {
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
+}
+
+.touch-scroll-y {
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  overscroll-behavior-y: contain;
 }
 
 /* Custom Scrollbars */

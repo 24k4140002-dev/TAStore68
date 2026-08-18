@@ -82,9 +82,9 @@ export default function App() {
   };
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden font-sans">
+    <div className="h-full h-[100dvh] w-full flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden font-sans fixed inset-0">
       {/* Top Main Navigation Header */}
-      <header className="h-[60px] flex-shrink-0 border-b border-slate-200 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md px-4 lg:px-6 flex items-center justify-between z-30 select-none">
+      <header className="h-[60px] flex-shrink-0 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 px-3 sm:px-4 lg:px-6 flex items-center justify-between z-30">
         {/* Left: Brand Logo & Version */}
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-2.5">

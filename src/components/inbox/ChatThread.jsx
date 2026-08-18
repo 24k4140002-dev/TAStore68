@@ -160,14 +160,18 @@ export default function ChatThread({
     : [];
 
   return (
-    <main className="flex-1 flex flex-col min-w-0 bg-slate-50/50 dark:bg-slate-950/40 relative overflow-hidden">
-      {/* Header */}
-      <div className="h-16 px-4 lg:px-6 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md flex items-center justify-between z-10 select-none flex-shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          {/* Mobile Back Button */}
+    <main className="flex-1 flex flex-col min-w-0 bg-slate-50/50 dark:bg-slate-950/40 relative overflow-hidden h-full">
+      {/* Header (Solid background & touch-friendly for Safari) */}
+      <div className="h-16 px-3 sm:px-4 lg:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between z-10 flex-shrink-0">
+        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+          {/* Mobile Back Button (Large 44px tap target) */}
           <button
-            onClick={onBackToList}
-            className="md:hidden p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 transition-smooth"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onBackToList && onBackToList();
+            }}
+            className="md:hidden flex items-center justify-center w-10 h-10 -ml-1 rounded-xl text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 active:bg-slate-200 dark:active:bg-slate-700 flex-shrink-0 cursor-pointer shadow-xs active:scale-95 transition-transform"
             title="Quay lại danh sách"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -210,10 +214,10 @@ export default function ChatThread({
         </div>
 
         {/* Right Action Buttons */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           <button
             onClick={() => onToggleStar(conversation.fb_conversation_id)}
-            className={`p-2.5 rounded-xl border transition-smooth ${
+            className={`p-2 sm:p-2.5 rounded-xl border transition-smooth ${
               conversation.is_starred
                 ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-500 border-amber-200 dark:border-amber-800'
                 : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 border-transparent'
@@ -225,7 +229,7 @@ export default function ChatThread({
 
           <button
             onClick={() => onUpdateStatus(conversation.fb_conversation_id, conversation.status === 'done' ? 'active' : 'done')}
-            className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 border transition-smooth ${
+            className={`px-3 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 border transition-smooth ${
               conversation.status === 'done'
                 ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800'
                 : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-200'
@@ -238,7 +242,7 @@ export default function ChatThread({
 
           <button
             onClick={onToggleProfilePanel}
-            className="p-2.5 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth"
+            className="p-2 sm:p-2.5 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth"
             title="Hồ sơ & Đơn hàng"
           >
             <Info className="w-4 h-4" />
@@ -246,8 +250,8 @@ export default function ChatThread({
         </div>
       </div>
 
-      {/* Messages Thread Container */}
-      <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-4">
+      {/* Messages Thread Container (Touch-scrollable) */}
+      <div className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-6 space-y-4 touch-scroll-y overscroll-contain">
         {isLoadingMessages ? (
           <div className="h-full flex flex-col items-center justify-center text-slate-400">
             <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin mb-2.5"></div>
@@ -425,7 +429,7 @@ export default function ChatThread({
         </div>
 
         {/* Quick Suggested Replies Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs touch-scroll-x overscroll-x-contain">
           <span className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 flex-shrink-0">
             <Sparkles className="w-3.5 h-3.5 text-amber-500" /> Phím tắt:
           </span>
@@ -433,7 +437,7 @@ export default function ChatThread({
             <button
               key={qr.id}
               onClick={() => handleSelectShortcut(qr)}
-              className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs sm:text-[13px] font-medium whitespace-nowrap transition-smooth border border-slate-200/60 dark:border-slate-700/60 flex items-center gap-1.5"
+              className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs sm:text-[13px] font-medium whitespace-nowrap transition-smooth border border-slate-200/60 dark:border-slate-700/60 flex items-center gap-1.5 flex-shrink-0"
             >
               <span className="font-mono font-bold text-amber-600 dark:text-amber-400 text-xs">{qr.shortcut}</span>
               <span className="hidden sm:inline text-xs opacity-80">{qr.title.replace(/^[^\w\s]+/, '')}</span>
@@ -498,7 +502,7 @@ export default function ChatThread({
                 handleSend();
               }
             }}
-            className="flex-1 px-4 py-2.5 text-[15px] leading-relaxed rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-smooth resize-none"
+            className="flex-1 px-4 py-2.5 text-[16px] sm:text-[15px] leading-relaxed rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-smooth resize-none"
           ></textarea>
 
           <button

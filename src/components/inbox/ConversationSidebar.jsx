@@ -89,7 +89,7 @@ export default function ConversationSidebar({
   const unreadTotal = conversations.filter(c => c.unread_count > 0).length;
 
   return (
-    <aside className="w-full h-full flex flex-col border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden select-none">
+    <aside className="w-full h-full flex flex-col border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
       {/* Header & Page Selector */}
       <div className="p-3.5 border-b border-slate-100 dark:border-slate-800 space-y-3">
         <div className="flex items-center justify-between gap-2">
@@ -163,55 +163,61 @@ export default function ConversationSidebar({
           </button>
         </div>
 
-        {/* Status Filter Chips */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs sm:text-[13px]">
+        {/* Status Filter Chips (Touch-scroll-x) */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs sm:text-[13px] touch-scroll-x overscroll-x-contain">
           <button
             onClick={() => onStatusFilterChange('all')}
-            className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium transition-smooth ${statusFilter === 'all' ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
+            className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium transition-smooth flex-shrink-0 ${statusFilter === 'all' ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
           >
             Tất cả
           </button>
           <button
             onClick={() => onStatusFilterChange('unread')}
-            className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1.5 transition-smooth ${statusFilter === 'unread' ? 'bg-blue-600 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
+            className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1.5 transition-smooth flex-shrink-0 ${statusFilter === 'unread' ? 'bg-brand-500 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
           >
-            <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span> Chưa đọc {unreadTotal > 0 && `(${unreadTotal})`}
+            <span className="w-2 h-2 rounded-full bg-brand-500 flex-shrink-0 animate-pulse"></span>
+            Chưa đọc
+            {unreadTotal > 0 && (
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${statusFilter === 'unread' ? 'bg-white text-brand-600' : 'bg-brand-500 text-white'}`}>
+                {unreadTotal}
+              </span>
+            )}
           </button>
           <button
             onClick={() => onStatusFilterChange('open')}
-            className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium transition-smooth ${statusFilter === 'open' ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
+            className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium transition-smooth flex-shrink-0 ${statusFilter === 'open' ? 'bg-blue-600 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
           >
             Đang mở
           </button>
           <button
-            onClick={() => onStatusFilterChange('done')}
-            className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1 transition-smooth ${statusFilter === 'done' ? 'bg-emerald-600 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
+            onClick={() => onStatusFilterChange('starred')}
+            className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1 transition-smooth flex-shrink-0 ${statusFilter === 'starred' ? 'bg-amber-500 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
           >
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Đã xong
+            <Star className="w-3.5 h-3.5 fill-current" /> Gắn sao
           </button>
           <button
-            onClick={() => onStatusFilterChange('starred')}
-            className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1 transition-smooth ${statusFilter === 'starred' ? 'bg-amber-500 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
+            onClick={() => onStatusFilterChange('done')}
+            className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1 transition-smooth flex-shrink-0 ${statusFilter === 'done' ? 'bg-emerald-600 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
           >
-            <Star className="w-3.5 h-3.5 fill-current text-amber-300" /> Theo dõi
+            <CheckCircle2 className="w-3.5 h-3.5" /> Đã xong
           </button>
           <button
             onClick={() => onStatusFilterChange('archived')}
-            className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1 transition-smooth ${statusFilter === 'archived' ? 'bg-slate-700 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
+            className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1 transition-smooth flex-shrink-0 ${statusFilter === 'archived' ? 'bg-slate-700 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
           >
             <Archive className="w-3.5 h-3.5" /> Lưu trữ
           </button>
           <button
             onClick={() => onStatusFilterChange('spam')}
-            className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1 transition-smooth ${statusFilter === 'spam' ? 'bg-red-600 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
+            className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1 transition-smooth flex-shrink-0 ${statusFilter === 'spam' ? 'bg-red-600 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
           >
             <AlertTriangle className="w-3.5 h-3.5" /> Spam
           </button>
         </div>
       </div>
 
-      {/* Conversations List */}
-      <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/60">
+      {/* Conversations List (Touch-scroll-y) */}
+      <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/60 touch-scroll-y overscroll-contain">
         {pages.length === 0 ? (
           <div className="h-64 flex flex-col items-center justify-center p-6 text-center text-slate-400">
             <div className="w-12 h-12 rounded-2xl bg-amber-50 dark:bg-amber-950/40 text-amber-500 flex items-center justify-center mb-3">
