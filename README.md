@@ -1,77 +1,103 @@
-# MetaPost Studio v2.0 Pro 🚀 - Trình Đăng Bài Đa Fanpage Facebook
+# TAStore68 Pro (v3.5.0) 🚀 — Hệ Thống Đăng Bài & CRM Fanpage Facebook Đa Kênh
 
-Công cụ Web App chuyên nghiệp, độc lập giúp bạn soạn bài viết và đăng đồng thời lên nhiều Trang Fanpage Facebook chỉ với **1 lần bấm**, hỗ trợ **Token Vĩnh Viễn**, **Hẹn giờ đăng bài**, **Mẫu bài viết**, **Tự động nén ảnh** và **Chống spam thông minh**.
-
----
-
-## ✨ Tính Năng Nổi Bật v2.0
-
-1. ♾️ **Token Vĩnh Viễn Không Hết Hạn:**
-   - Đổi mã tạm thời sang mã vĩnh viễn chuẩn Graph API của Meta.
-   - Nhập 1 lần duy nhất, không bao giờ lo token bị hết hạn sau 1–2 giờ.
-2. 📅 **Hẹn Giờ Đăng Bài (Schedule Posts):**
-   - Chọn ngày và giờ phát sóng, máy chủ Facebook sẽ tự động giữ bài và đăng đúng lịch hẹn.
-3. 📝 **Quản Lý Mẫu Bài Viết (Templates):**
-   - Lưu lại các bài viết bán hàng thường dùng (mẫu khuyến mãi, giới thiệu sản phẩm, hotline chốt đơn) để gọi lại chỉ với 1 click.
-4. ⚡ **Tự Động Nén Ảnh (Auto-Compress):**
-   - Tự động nén và tối ưu hóa dung lượng các ảnh nặng (3MB–10MB) xuống còn chuẩn web nhẹ nhàng trước khi tải lên, giúp đăng bài siêu nhanh và không bị nghẽn mạng.
-5. 🛡️ **Anti-Spam Thông Minh:**
-   - Tự động hoán vị thứ tự hashtag, chèn ký tự ẩn và mã phân biệt ngẫu nhiên giữa các Fanpage để bảo vệ điểm chất lượng (Page Health Score).
-6. 🔄 **Thử Lại Bài Lỗi (Retry Failed Posts):**
-   - Khi đăng lên 5–10 Page mà có 1 Page bị gián đoạn mạng, bạn có thể bấm "Thử lại" riêng cho Page đó mà không cần đăng lại các Page đã thành công.
-7. 🛑 **Nút Dừng Đăng Tức Thì (Cancel Publish):**
-   - Dễ dàng bấm dừng tiến trình phát sóng bất cứ lúc nào nếu phát hiện nhầm lẫn.
-8. 📱 **Tương Thích Mọi Thiết Bị:**
-   - Giao diện Dark/Light mode hiện đại, hoạt động mượt mà trên cả máy tính, máy tính bảng và điện thoại.
+**TAStore68 Pro** là hệ sinh thái Web App chuyên nghiệp kết hợp giữa **Quản Lý Hội Thoại CRM Inbox Đa Page** và **Studio Đăng Bài Đa Phương Tiện (Ảnh/Album/Video)** đồng thời lên hàng loạt Fanpage Facebook.
 
 ---
 
-## 🚀 Hướng Dẫn Sử Dụng (Dưới Máy Tính)
+## 🌟 Điểm Nổi Bật & Tính Năng Chính
 
-### Cách 1: Mở trực tiếp (Không cần cài đặt)
-* Nhấp đúp vào file [`start.bat`](file:///c:/Users/Admin/.codex/fb-multi-post-app/start.bat) hoặc mở file [`index.html`](file:///c:/Users/Admin/.codex/fb-multi-post-app/index.html) bằng trình duyệt (Chrome, Cốc Cốc, Edge).
+### 💬 1. CRM Inbox — Quản Lý Hội Thoại & Khách Hàng Đa Page
+- **Quản lý đa Fanpage tập trung:** Chuyển đổi linh hoạt giữa 14+ Fanpage hoặc xem chế độ "Tất cả Page".
+- **Giao diện Chat Messenger hiện đại:** Hỗ trợ tin nhắn văn bản, ảnh, âm thanh, sticker và tệp đính kèm.
+- **Phân biệt Page trùng tên thông minh:** Tự động hiển thị lượt Like thực tế (`1.062 Like`, `1.478 Follower`) hoặc đặt Nickname riêng cho từng trang.
+- **Mẫu trả lời nhanh (Quick Replies):** Phím tắt thông minh `/size`, `/stk`, `/ship`, `/in`, `/camon`.
+- **Tạo mã VietQR tự động:** Điền số tiền & nội dung, tạo mã QR ngân hàng tức thì để gửi khách quét trả tiền.
+- **Tạo đơn hàng & Ghi chú CRM:** Lưu thông tin khách hàng, số điện thoại, ghi chú nội bộ và lịch sử đơn hàng trực tiếp trên thiết bị (Offline-first / LocalStorage).
+- **Tối ưu Mobile WebKit / Safari:** Hỗ trợ giao diện tràn viền `100dvh`, vuốt chạm cảm ứng mượt mà, chống tự động phóng to (Auto-zoom) trên iPhone.
 
-### Cách 2: Chạy qua Server nội bộ (Node.js)
+### 📢 2. PostStudio Pro — Đăng Bài Đa Phương Tiện Đa Page
+- **Đa dạng hình thức đăng:**
+  - 🖼️ **Đăng 1 ảnh:** Gửi trực tiếp lên Graph API `/{pageId}/photos`.
+  - 📸 **Đăng Album nhiều ảnh (Multi-photo):** Tải lên các ảnh unreleased và gom thành 1 bài Feed album hoàn chỉnh.
+  - 🎥 **Đăng Video:** Hỗ trợ video MP4, MOV với timeout lên đến 120 giây.
+  - 📝 **Đăng Văn bản / Link:** Tự động tạo link preview.
+- **Nén ảnh tự động (Smart Canvas Auto-Compress):** Nén ảnh dung lượng 5MB–10MB xuống còn ~400KB trong 0.05s trước khi upload.
+- **Modal tiến trình phát sóng:** Hiển thị phần trăm thực tế (0% → 100%), trạng thái từng Page và link trực tiếp đến bài viết Facebook sau khi đăng xong.
+- **Xử lý sự cố linh hoạt:** Nút **"Dừng tiến trình"** và nút **"Thử lại các Page lỗi"**.
+- **Smart Anti-Spam:** Tự động chèn ký tự ẩn (Zero-Width Space `\u200B`) và mã ngẫu nhiên để tránh bị Facebook quét trùng lặp nội dung.
+- **Lên lịch đăng bài (Schedule):** Hẹn giờ đăng chuẩn Graph API.
+
+### 🔒 3. Bảo Mật & Kiến Trúc Hiện Đại
+- **Kiến trúc Vercel Serverless `/api/*`:** Đổi Token vĩnh viễn an toàn trên Server (`api/meta/exchange-token.js`), không bao giờ để lộ `App Secret` trên trình duyệt.
+- **Đồng bộ Mobile 1-Scan:** Tạo mã QR đăng nhập nhanh trên máy tính để camera iPhone/Android quét là đăng nhập ngay lập tức.
+- **Công nghệ cốt lõi:** React 19, Vite, Tailwind CSS, Lucide Icons, Canvas Confetti.
+
+---
+
+## 🛠️ Hướng Dẫn Cài Đặt & Phát Triển Cục Bộ
+
+### 1. Cài đặt Dependencies:
 ```bash
-node server.js
+npm install
 ```
-Mở trình duyệt truy cập: `http://localhost:3000`
+
+### 2. Cấu hình Biến môi trường:
+Tạo file `.env.local` dựa trên mẫu `.env.example`:
+```env
+META_APP_ID=your_app_id
+META_APP_SECRET=your_app_secret
+META_GRAPH_VERSION=v19.0
+```
+
+### 3. Khởi chạy máy chủ phát triển (Vite Dev Server):
+```bash
+npm run dev
+```
+Truy cập: `http://localhost:3000`
+
+### 4. Build bản Production:
+```bash
+npm run build
+```
 
 ---
 
-## 🌐 Hướng Dẫn Đưa Lên Mạng (Deploy lên Vercel / Cloudflare Pages)
+## 🚀 Triển Khai Lên Vercel
 
-Vì đây là Web App tĩnh (HTML/CSS/JS thuần), bạn có thể đưa lên mạng hoàn toàn **Miễn Phí** chỉ trong 1 phút:
-
-### Cách Deploy lên Vercel (Dễ nhất - Không cần biết code):
-1. Truy cập: [vercel.com/drop](https://vercel.com/drop) (đăng nhập tài khoản Google/GitHub nếu chưa có).
-2. Kéo thả nguyên thư mục `fb-multi-post-app` thả vào khung trình duyệt của Vercel.
-3. Vercel sẽ tự động cấp cho bạn một đường link online (ví dụ: `https://metapost-studio.vercel.app`).
-4. Từ nay bạn có thể mở đường link đó trên điện thoại hay bất kỳ máy tính nào để đăng bài!
-
-### Cách Deploy qua Cloudflare Pages:
-1. Đăng nhập [Cloudflare Dashboard](https://dash.cloudflare.com/) $\rightarrow$ **Workers & Pages** $\rightarrow$ **Create Application** $\rightarrow$ **Pages** $\rightarrow$ **Direct Upload**.
-2. Upload thư mục `fb-multi-post-app` lên là xong.
+Dự án đã được cấu hình tối ưu sẵn cho Vercel:
+1. Đẩy code lên GitHub Repository.
+2. Import project vào [Vercel Dashboard](https://vercel.com).
+3. Thêm 2 biến môi trường trong **Project Settings $\rightarrow$ Environment Variables**:
+   - `META_APP_ID`
+   - `META_APP_SECRET`
+4. Deploy tự động và sử dụng đường dẫn production `https://metapost-studio.vercel.app`!
 
 ---
 
-## ♾️ Hướng Dẫn Kích Hoạt Token Vĩnh Viễn
+## 📁 Cấu Trúc Dự Án
 
-1. Trên thanh tiêu đề Web App, bấm nút **"Token Vĩnh Viễn"** (icon $\infty$).
-2. Nhập:
-   - **App ID:** ID ứng dụng của bạn trên Meta Developer (Ví dụ: `990458834013160`).
-   - **App Secret:** Khóa bí mật (vào *developers.facebook.com/apps* $\rightarrow$ chọn App $\rightarrow$ *Cài đặt cơ bản* $\rightarrow$ bấm *Hiển thị* bên cạnh Khóa bí mật).
-   - **Token ngắn hạn:** Dán mã Token lấy từ Graph API Explorer.
-3. Bấm **"Nâng Cấp Sang Token Vĩnh Viễn"**.
-4. Tool sẽ tự động đổi sang Token dài hạn và lưu lại toàn bộ Page Access Token vĩnh viễn vào trình duyệt. Từ lần sau bạn không cần lấy token nữa!
+```
+├── api/
+│   └── meta/
+│       └── exchange-token.js   # Serverless Token Exchange endpoint
+├── src/
+│   ├── components/
+│   │   ├── common/             # TokenModal, ThemeToggle...
+│   │   ├── inbox/              # CRMInbox, ChatThread, ConversationSidebar...
+│   │   └── post/               # PostStudio (Multi-media publishing engine)
+│   ├── services/
+│   │   └── facebookApi.js      # Centralized Facebook Graph API engine
+│   ├── App.jsx                 # Main application layout & router
+│   ├── main.jsx                # React root entry point
+│   └── index.css               # Tailwind & WebKit mobile touch styles
+├── .env.example                # Clean environment variables template
+├── db-setup.sql                # SQL Schema with Row Level Security (RLS)
+├── package.json                # Project manifest (ES Module)
+├── vercel.json                 # Vercel security headers & routing
+└── vite.config.js              # Optimized Vite rollup bundle splitting
+```
 
 ---
 
-## 📁 Cấu Trúc Mã Nguồn
+*Phát triển bởi đội ngũ kỹ thuật TAStore68 • Bản quyền © 2026*
 
-- `index.html`: Giao diện chính v2.0 đầy đủ tính năng & chuẩn SEO/a11y.
-- `style.css`: Hệ thống thiết kế responsive, light/dark theme, Facebook feed preview mockup.
-- `app.js`: Engine xử lý Graph API v19.0, nén ảnh Canvas, đổi Token vĩnh viễn, hẹn giờ đăng.
-- `server.js`: Node.js web server bảo mật cao (chống path traversal, MIME types đầy đủ).
-- `vercel.json`: Cấu hình header bảo mật và cache tối ưu cho Vercel.
-- `start.bat`: File nhấp đúp mở nhanh trên Windows.

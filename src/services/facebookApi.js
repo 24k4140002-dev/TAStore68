@@ -1,5 +1,5 @@
-const GRAPH_API_VERSION = 'v19.0';
-const API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+export const META_GRAPH_VERSION = 'v19.0';
+export const API_BASE = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
 
 // Strip invisible characters, smart quotes, zero-width spaces, and newlines (common on iOS)
 export function cleanFacebookToken(token) {
@@ -8,6 +8,68 @@ export function cleanFacebookToken(token) {
     .replace(/["'”’‘“]/g, '')
     .replace(/[\u200B-\u200D\uFEFF\u00A0\r\n\t\s]/g, '')
     .trim();
+}
+
+// Client-side HTML5 Canvas Smart Image Compression (5MB -> 400KB in ~50ms)
+export async function compressImage(file, maxDimension = 1920, quality = 0.82) {
+  if (!file || !file.type?.startsWith('image/') || file.type === 'image/gif') {
+    return file;
+  }
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (blob && blob.size < file.size) {
+              const compressed = new File([blob], file.name, {
+                type: 'image/jpeg',
+                lastModified: Date.now()
+              });
+              resolve(compressed);
+            } else {
+              resolve(file);
+            }
+          },
+          'image/jpeg',
+          quality
+        );
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Generate unique zero-width characters and random tag to prevent duplicate content flags
+export function generateSmartAntiSpam(text, pageIndex = 0, totalPages = 1) {
+  if (!text || totalPages <= 1) return text;
+  const zeroWidthSpaces = ['\u200B', '\u200C', '\u200D', '\uFEFF'];
+  const zws = Array.from({ length: (pageIndex % 5) + 1 }, () =>
+    zeroWidthSpaces[Math.floor(Math.random() * zeroWidthSpaces.length)]
+  ).join('');
+  const randomTag = Math.random().toString(36).substring(2, 6).toUpperCase();
+  return `${text}${zws}\n\n🏷️ [#${randomTag}]`;
 }
 
 export async function safeFetch(url, options = {}, timeoutMs = 20000) {
@@ -594,28 +656,155 @@ export async function syncUnassignPageLabel(pageId, pageToken, labelIdOrName, us
   }
 }
 
-// Exchange short-lived token for long-lived permanent token using App ID + App Secret
-export async function exchangePermanentToken(appId, appSecret, shortToken) {
-  const cleanAppId = (appId || '').trim();
-  const cleanSecret = (appSecret || '').trim();
-  const cleanShort = (shortToken || '').trim();
-
-  if (!cleanAppId || !cleanSecret || !cleanShort) {
-    throw new Error('Vui lòng nhập đủ App ID, App Secret và Token ngắn hạn');
+// Post to a single Facebook Page (supports text, link, 1 photo, multi-photo album, video, scheduling, anti-spam)
+export async function publishToFacebookPage(page, {
+  postType = 'photo',
+  postText = '',
+  postLink = '',
+  mediaFiles = [],
+  isScheduled = false,
+  scheduleTimestamp = null,
+  smartAntiSpam = true,
+  pageIndex = 0,
+  totalPages = 1
+}) {
+  const pageToken = page.access_token;
+  if (!pageToken) {
+    throw new Error('Thiếu Page Access Token (Quyền quản trị trang)');
   }
 
-  const exchangeUrl = `${API_BASE}/oauth/access_token?grant_type=fb_exchange_token&client_id=${encodeURIComponent(cleanAppId)}&client_secret=${encodeURIComponent(cleanSecret)}&fb_exchange_token=${encodeURIComponent(cleanShort)}`;
-  const res = await safeFetch(exchangeUrl);
+  const finalMessage = smartAntiSpam
+    ? generateSmartAntiSpam(postText, pageIndex, totalPages)
+    : postText;
 
-  if (!res?.access_token) {
-    throw new Error('Facebook không trả về Access Token hợp lệ.');
+  // 1. Text & Optional Link Post
+  if (postType === 'text' || (postType === 'photo' && mediaFiles.length === 0)) {
+    const url = `${API_BASE}/${page.id}/feed`;
+    const formData = new FormData();
+    formData.append('message', finalMessage);
+    formData.append('access_token', pageToken);
+
+    if (postLink) {
+      formData.append('link', postLink);
+    }
+
+    if (isScheduled && scheduleTimestamp) {
+      formData.append('published', 'false');
+      formData.append('scheduled_publish_time', scheduleTimestamp);
+    }
+
+    return await safeFetch(url, { method: 'POST', body: formData });
   }
 
-  // Save App credentials
-  localStorage.setItem('metapost_app_id', cleanAppId);
-  localStorage.setItem('metapost_app_secret', cleanSecret);
+  // 2. Single Photo Post
+  if (postType === 'photo' && mediaFiles.length === 1) {
+    const url = `${API_BASE}/${page.id}/photos`;
+    const formData = new FormData();
+    formData.append('source', mediaFiles[0]);
+    formData.append('caption', finalMessage);
+    formData.append('access_token', pageToken);
 
-  return res.access_token;
+    if (isScheduled && scheduleTimestamp) {
+      formData.append('published', 'false');
+      formData.append('scheduled_publish_time', scheduleTimestamp);
+    }
+
+    return await safeFetch(url, { method: 'POST', body: formData });
+  }
+
+  // 3. Multi-Photo Post (Upload unreleased photos first, then attach to feed)
+  if (postType === 'photo' && mediaFiles.length > 1) {
+    const mediaFbidArray = [];
+
+    for (let p = 0; p < mediaFiles.length; p++) {
+      const uploadUrl = `${API_BASE}/${page.id}/photos`;
+      const photoForm = new FormData();
+      photoForm.append('source', mediaFiles[p]);
+      photoForm.append('published', 'false');
+      photoForm.append('access_token', pageToken);
+
+      const photoJson = await safeFetch(uploadUrl, { method: 'POST', body: photoForm });
+      mediaFbidArray.push({ media_fbid: photoJson.id });
+    }
+
+    // Create multi-photo feed post
+    const feedUrl = `${API_BASE}/${page.id}/feed`;
+    const feedForm = new FormData();
+    feedForm.append('message', finalMessage);
+    feedForm.append('attached_media', JSON.stringify(mediaFbidArray));
+    feedForm.append('access_token', pageToken);
+
+    if (isScheduled && scheduleTimestamp) {
+      feedForm.append('published', 'false');
+      feedForm.append('scheduled_publish_time', scheduleTimestamp);
+    }
+
+    return await safeFetch(feedUrl, { method: 'POST', body: feedForm });
+  }
+
+  // 4. Video Post
+  if (postType === 'video' && mediaFiles.length > 0) {
+    const url = `${API_BASE}/${page.id}/videos`;
+    const formData = new FormData();
+    formData.append('source', mediaFiles[0]);
+    formData.append('description', finalMessage);
+    formData.append('access_token', pageToken);
+
+    if (isScheduled && scheduleTimestamp) {
+      formData.append('published', 'false');
+      formData.append('scheduled_publish_time', scheduleTimestamp);
+    }
+
+    return await safeFetch(url, { method: 'POST', body: formData }, 120000); // 120s timeout for video
+  }
+
+  throw new Error('Loại bài đăng hoặc tệp đính kèm không hợp lệ.');
+}
+
+// Helper to get Facebook post link
+export function getFacebookPostUrl(pageId, postId) {
+  if (!postId) return `https://www.facebook.com/${pageId}`;
+  if (String(postId).includes('_')) {
+    const parts = String(postId).split('_');
+    return `https://www.facebook.com/${parts[0]}/posts/${parts[1]}`;
+  }
+  return `https://www.facebook.com/${pageId}/posts/${postId}`;
+}
+
+// Exchange short-lived token for long-lived permanent token (via Vercel Serverless /api/meta/exchange-token)
+export async function exchangePermanentToken(shortToken, customAppId = '', customAppSecret = '') {
+  const cleanShort = cleanFacebookToken(shortToken);
+  if (!cleanShort) {
+    throw new Error('Vui lòng nhập Token ngắn hạn (bắt đầu bằng EAA...)');
+  }
+
+  // Attempt serverless endpoint first (keeps App Secret safe on server)
+  try {
+    const res = await fetch('/api/meta/exchange-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        shortToken: cleanShort,
+        appId: customAppId,
+        appSecret: customAppSecret
+      })
+    });
+
+    const data = await res.json();
+    if (res.ok && data.access_token) {
+      return data.access_token;
+    }
+    if (data.error && !customAppId) {
+      throw new Error(data.error);
+    }
+  } catch (e) {
+    if (!customAppId || !customAppSecret) throw e;
+  }
+
+  // Direct Graph API fallback if custom credentials provided
+  const exchangeUrl = `${API_BASE}/oauth/access_token?grant_type=fb_exchange_token&client_id=${encodeURIComponent(customAppId)}&client_secret=${encodeURIComponent(customAppSecret)}&fb_exchange_token=${encodeURIComponent(cleanShort)}`;
+  const directRes = await safeFetch(exchangeUrl);
+  return directRes.access_token;
 }
 
 // Fetch assigned custom labels for a specific customer (PSID)

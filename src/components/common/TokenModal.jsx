@@ -70,26 +70,29 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
     e.preventDefault();
     setErrorMessage('');
     setSuccessMessage('');
-    const cleanId = cleanFacebookToken(appId);
-    const cleanSec = cleanFacebookToken(appSecret);
     const cleanShort = cleanFacebookToken(shortToken);
 
-    if (!cleanId || !cleanSec || !cleanShort) {
-      setErrorMessage('Vui lòng điền đủ App ID, App Secret và Token ngắn hạn');
+    if (!cleanShort) {
+      setErrorMessage('Vui lòng dán Token ngắn hạn vào ô bên dưới');
       return;
     }
 
     setIsLoading(true);
     try {
-      const permanentToken = await exchangePermanentToken(cleanId, cleanSec, cleanShort);
+      // Exchange token securely via Vercel Serverless Function /api/meta/exchange-token
+      const permanentToken = await exchangePermanentToken(cleanShort, appId, appSecret);
       const pages = await fetchPages(permanentToken);
-      setSuccessMessage(`🎉 Nâng cấp vĩnh viễn thành công! Đã nạp ${pages.length} Fanpage.`);
+      if (!pages || pages.length === 0) {
+        setErrorMessage('Token đổi thành công nhưng không tìm thấy Fanpage nào.');
+        return;
+      }
+      setSuccessMessage(`🎉 Nâng cấp vĩnh viễn thành công! Đã kết nối ${pages.length} Fanpage.`);
       setTimeout(() => {
         onSave(permanentToken, pages);
         onClose();
       }, 700);
     } catch (err) {
-      setErrorMessage(`Lỗi nâng cấp Token: ${err.message}`);
+      setErrorMessage(`Lỗi đổi Token: ${err.message}`);
     } finally {
       setIsLoading(false);
     }
@@ -226,50 +229,54 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
             </form>
           )}
 
-          {/* Tab 2: Permanent Token Generator (App ID + App Secret + Short Token) */}
+          {/* Tab 2: Permanent Token Generator (Serverless Backend Exchange) */}
           {tab === 'upgrade' && (
-            <form onSubmit={handleUpgradePermanent} className="p-6 space-y-3.5">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Facebook App ID *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ví dụ: 123456789012345"
-                  value={appId}
-                  onChange={(e) => setAppId(e.target.value)}
-                  className="w-full p-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-500 focus:outline-none transition-smooth"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Facebook App Secret *
-                </label>
-                <input
-                  type="password"
-                  required
-                  placeholder="Nhập App Secret từ Meta for Developers"
-                  value={appSecret}
-                  onChange={(e) => setAppSecret(e.target.value)}
-                  className="w-full p-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-500 focus:outline-none transition-smooth"
-                />
-              </div>
-
+            <form onSubmit={handleUpgradePermanent} className="p-6 space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Token Ngắn Hạn (User Token từ Graph API Explorer) *
                 </label>
                 <textarea
-                  rows="2"
+                  rows="3"
                   required
-                  placeholder="Dán token ngắn hạn EAA... vào đây để đổi sang Vĩnh Viễn"
+                  placeholder="Dán token ngắn hạn (bắt đầu bằng EAA...) vào đây..."
                   value={shortToken}
                   onChange={(e) => setShortToken(e.target.value)}
-                  className="w-full p-2.5 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-500 focus:outline-none transition-smooth resize-none break-all"
+                  className="w-full p-3 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-500 focus:outline-none transition-smooth resize-none break-all"
                 ></textarea>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Hệ thống tự động kết nối qua Vercel Serverless để đổi sang <strong>Token Vĩnh Viễn</strong> không bao giờ hết hạn.
+                </p>
               </div>
+
+              {/* Optional Custom App Secret Toggle */}
+              <details className="text-xs group">
+                <summary className="cursor-pointer font-bold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 select-none">
+                  ⚙️ Cấu hình App ID / Secret riêng (Tuỳ chọn khi chạy localhost)
+                </summary>
+                <div className="mt-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60 space-y-2.5 animate-in fade-in">
+                  <div>
+                    <label className="block font-medium text-slate-600 dark:text-slate-400 mb-1">Custom App ID</label>
+                    <input
+                      type="text"
+                      placeholder="123456789..."
+                      value={appId}
+                      onChange={(e) => setAppId(e.target.value)}
+                      className="w-full p-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block font-medium text-slate-600 dark:text-slate-400 mb-1">Custom App Secret</label>
+                    <input
+                      type="password"
+                      placeholder="App Secret..."
+                      value={appSecret}
+                      onChange={(e) => setAppSecret(e.target.value)}
+                      className="w-full p-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+              </details>
 
               {errorMessage && (
                 <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 flex items-start gap-2 text-red-700 dark:text-red-300 text-xs">

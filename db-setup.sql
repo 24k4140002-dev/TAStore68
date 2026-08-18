@@ -163,6 +163,28 @@ INSERT INTO tags (name, color) VALUES
 ON CONFLICT (name) DO NOTHING;
 
 -- ============================================================
--- ✅ DONE! Schema setup complete.
--- You can verify by running: SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';
+-- 11. ROW LEVEL SECURITY (RLS) POLICIES
+-- ============================================================
+ALTER TABLE campaigns ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE labels ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversation_labels ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tags ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customer_tags ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notes ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow authenticated and anon access" ON campaigns FOR ALL USING (true);
+CREATE POLICY "Allow authenticated and anon access" ON customers FOR ALL USING (true);
+CREATE POLICY "Allow authenticated and anon access" ON conversations FOR ALL USING (true);
+CREATE POLICY "Allow authenticated and anon access" ON messages FOR ALL USING (true);
+CREATE POLICY "Allow authenticated and anon access" ON labels FOR ALL USING (true);
+CREATE POLICY "Allow authenticated and anon access" ON conversation_labels FOR ALL USING (true);
+CREATE POLICY "Allow authenticated and anon access" ON tags FOR ALL USING (true);
+CREATE POLICY "Allow authenticated and anon access" ON customer_tags FOR ALL USING (true);
+CREATE POLICY "Allow authenticated and anon access" ON notes FOR ALL USING (true);
+
+-- ============================================================
+-- ✅ DONE! Schema setup with RLS complete.
 -- ============================================================
