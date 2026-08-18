@@ -337,9 +337,13 @@ function playChimeSound() {
       setMobileView('chat'); // Switch view on mobile to chat ONLY on explicit tap
     }
 
-    // ⚡ INSTANT SWR CACHE: Render previously cached messages in 0.01s
+    // ⚡ INSTANT SWR CACHE: Render previously cached messages in 0.001s
     try {
-      const cachedMsgs = JSON.parse(sessionStorage.getItem(`metapost_msgs_${conv.fb_conversation_id}`) || '[]');
+      const cachedMsgs = JSON.parse(
+        localStorage.getItem(`metapost_msgs_${conv.fb_conversation_id}`) ||
+        sessionStorage.getItem(`metapost_msgs_${conv.fb_conversation_id}`) ||
+        '[]'
+      );
       if (cachedMsgs.length > 0) {
         setMessages(cachedMsgs);
         setIsLoadingMessages(false);
@@ -373,12 +377,16 @@ function playChimeSound() {
     }
 
     try {
-      // Sync read status with Facebook Meta Business Suite
+      // Sync read status with Facebook Meta Business Suite (non-blocking)
       markConversationAsRead(conv.fb_conversation_id, conv.page_token || fbToken);
 
       const msgs = await fetchConversationMessages(conv.fb_conversation_id, conv.page_token || fbToken);
-      setMessages(msgs);
-      sessionStorage.setItem(`metapost_msgs_${conv.fb_conversation_id}`, JSON.stringify(msgs));
+      if (Array.isArray(msgs) && msgs.length > 0) {
+        setMessages(msgs);
+        localStorage.setItem(`metapost_msgs_${conv.fb_conversation_id}`, JSON.stringify(msgs));
+        sessionStorage.setItem(`metapost_msgs_${conv.fb_conversation_id}`, JSON.stringify(msgs));
+      }
+      setIsLoadingMessages(false);
 
       // Background sync with Facebook custom labels if PSID exists
       if (conv.customer_psid) {

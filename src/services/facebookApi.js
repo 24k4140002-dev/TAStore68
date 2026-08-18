@@ -437,35 +437,22 @@ export async function fetchAllPagesUnreadSummary(allPages, fbToken) {
   return { total, perPage };
 }
 
-// Fetch messages for a conversation with bulletproof fallback
+// Fetch messages for a conversation (Ultra-fast direct fetch)
 export async function fetchConversationMessages(conversationId, pageToken) {
   if (!conversationId || !pageToken) return [];
   try {
     const res = await safeFetch(
-      `${API_BASE}/${conversationId}/messages?fields=id,created_time,from,message,attachments{id,mime_type,name,size,file_url,image_data},sticker,shares&limit=100&access_token=${encodeURIComponent(pageToken)}`
-    );
-    if (res && Array.isArray(res.data)) {
-      const msgs = [...res.data].reverse();
-      msgs.forEach(msg => {
-        if (msg.sticker) {
-          msg.is_sticker = true;
-          if (msg.attachments?.data) {
-            msg.attachments.data.forEach(a => { a.is_sticker = true; });
-          }
-        }
-      });
-      return msgs;
-    }
-  } catch (e) {
-    console.warn('Extended fetch failed, trying standard fields:', e);
-  }
-
-  // Fallback to minimal core fields
-  try {
-    const res = await safeFetch(
-      `${API_BASE}/${conversationId}/messages?fields=id,created_time,from,message,attachments{id,mime_type,file_url,image_data},sticker&limit=100&access_token=${encodeURIComponent(pageToken)}`
+      `${API_BASE}/${conversationId}/messages?fields=id,created_time,from,message,attachments{id,mime_type,name,size,file_url,image_data},sticker&limit=40&access_token=${encodeURIComponent(pageToken)}`
     );
     const msgs = (res?.data || []).reverse();
+    msgs.forEach(msg => {
+      if (msg.sticker) {
+        msg.is_sticker = true;
+        if (msg.attachments?.data) {
+          msg.attachments.data.forEach(a => { a.is_sticker = true; });
+        }
+      }
+    });
     return msgs;
   } catch (err) {
     console.error('fetchConversationMessages error:', err);
