@@ -23,7 +23,10 @@ import {
   Zap,
   QrCode,
   Bot,
-  Plus
+  Plus,
+  ThumbsUp,
+  Share2,
+  FileText
 } from 'lucide-react';
 import {
   formatDateTime,
@@ -34,6 +37,33 @@ import {
   DEFAULT_QUICK_REPLIES
 } from '../../services/facebookApi';
 import CustomerAvatar from '../common/CustomerAvatar';
+
+function formatMessageTime(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function formatDateDivider(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  if (d.toDateString() === today.toDateString()) {
+    return 'Hôm nay';
+  }
+  if (d.toDateString() === yesterday.toDateString()) {
+    return 'Hôm qua';
+  }
+  return d.toLocaleDateString('vi-VN', { weekday: 'short', day: 'numeric', month: 'numeric', year: 'numeric' });
+}
+
+function isDifferentDay(d1, d2) {
+  if (!d1 || !d2) return true;
+  return new Date(d1).toDateString() !== new Date(d2).toDateString();
+}
 
 export default function ChatThread({
   conversation,
@@ -83,15 +113,15 @@ export default function ChatThread({
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleSend = async (e) => {
-    if (e) e.preventDefault();
-    if (!replyText.trim() && !attachedFile) return;
+  const handleSend = async (textToSend = null) => {
+    const finalContent = textToSend !== null ? textToSend : replyText.trim();
+    if (!finalContent && !attachedFile) return;
 
     setIsSending(true);
     try {
       if (onSendMessage) {
         await onSendMessage({
-          text: replyText.trim(),
+          text: finalContent,
           file: attachedFile,
           mode: replyMode
         });
@@ -103,6 +133,10 @@ export default function ChatThread({
     } finally {
       setIsSending(false);
     }
+  };
+
+  const handleSendLike = () => {
+    handleSend('👍');
   };
 
   if (!conversation) {
@@ -159,7 +193,7 @@ export default function ChatThread({
   return (
     <main className="flex-1 flex flex-col min-w-0 bg-slate-50/50 dark:bg-slate-950/40 relative overflow-hidden h-full">
       {/* Header (Solid background & touch-friendly for Safari) */}
-      <div className="h-16 px-3 sm:px-4 lg:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between z-10 flex-shrink-0">
+      <div className="h-14 sm:h-16 px-3 sm:px-4 lg:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between z-10 flex-shrink-0">
         <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
           {/* Mobile Back Button (Large 44px tap target) */}
           <button
@@ -179,8 +213,8 @@ export default function ChatThread({
             <CustomerAvatar
               url={conversation.avatar_url}
               name={conversation.customer_name}
-              size="w-10 h-10"
-              textClass="text-sm font-bold"
+              size="w-9 h-9 sm:w-10 sm:h-10"
+              textClass="text-xs sm:text-sm font-bold"
             />
             <span
               className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full flex items-center justify-center text-[8px] text-white border border-white dark:border-slate-900 ${
@@ -193,25 +227,25 @@ export default function ChatThread({
 
           {/* Customer Name & Page info */}
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="font-bold text-base sm:text-lg text-slate-900 dark:text-white truncate">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <h3 className="font-bold text-sm sm:text-base text-slate-900 dark:text-white truncate">
                 {conversation.customer_name}
               </h3>
               {conversation.unread_count > 0 && (
-                <span className="w-2.5 h-2.5 rounded-full bg-brand-500 flex-shrink-0"></span>
+                <span className="w-2 h-2 rounded-full bg-brand-500 flex-shrink-0"></span>
               )}
             </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+            <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate mt-0.2">
               {conversation.page_name} • {conversation.conversation_type === 'messenger' ? 'Messenger' : 'Bình luận'}
             </p>
           </div>
         </div>
 
         {/* Right Action Buttons */}
-        <div className="flex items-center gap-1.5 sm:gap-2">
+        <div className="flex items-center gap-1 sm:gap-2">
           <button
             onClick={() => onToggleStar(conversation.fb_conversation_id)}
-            className={`p-2 sm:p-2.5 rounded-xl border transition-smooth ${
+            className={`p-2 rounded-xl border transition-smooth ${
               conversation.is_starred
                 ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-500 border-amber-200 dark:border-amber-800'
                 : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 border-transparent'
@@ -223,20 +257,20 @@ export default function ChatThread({
 
           <button
             onClick={() => onUpdateStatus(conversation.fb_conversation_id, conversation.status === 'done' ? 'active' : 'done')}
-            className={`px-3 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 border transition-smooth ${
+            className={`px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl text-xs font-bold flex items-center gap-1 sm:gap-1.5 border transition-smooth ${
               conversation.status === 'done'
                 ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800'
                 : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-200'
             }`}
             title="Đánh dấu đã hoàn thành xử lý"
           >
-            <CheckCircle2 className="w-4 h-4" />
-            <span className="hidden sm:inline">{conversation.status === 'done' ? 'Đã Xử Lý' : 'Xong'}</span>
+            <CheckCircle2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+            <span>{conversation.status === 'done' ? 'Đã Xong' : 'Xong'}</span>
           </button>
 
           <button
             onClick={onToggleProfilePanel}
-            className="p-2 sm:p-2.5 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth"
+            className="p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth"
             title="Hồ sơ & Đơn hàng"
           >
             <Info className="w-4 h-4" />
@@ -244,8 +278,8 @@ export default function ChatThread({
         </div>
       </div>
 
-      {/* Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-6 space-y-4 touch-scroll-y overscroll-contain">
+      {/* Messages Scroll Area (With Messenger-style Consecutive Grouping) */}
+      <div className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-6 space-y-1 touch-scroll-y overscroll-contain">
         {isLoadingMessages ? (
           <div className="h-full flex flex-col items-center justify-center text-slate-400">
             <div className="w-8 h-8 border-3 border-brand-500 border-t-transparent rounded-full animate-spin mb-3"></div>
@@ -260,64 +294,175 @@ export default function ChatThread({
         ) : (
           messages.map((msg, idx) => {
             const isFromPage = msg.from?.id === conversation.page_id;
+            const prevMsg = messages[idx - 1];
+            const nextMsg = messages[idx + 1];
+
+            // Date divider check
+            const showDateDivider = !prevMsg || isDifferentDay(prevMsg.created_time, msg.created_time);
+
+            // Grouping calculations (within 5 minutes)
+            const isPrevSame = prevMsg && (prevMsg.from?.id === msg.from?.id) && !isDifferentDay(prevMsg.created_time, msg.created_time) && ((new Date(msg.created_time) - new Date(prevMsg.created_time)) < 300000);
+            const isNextSame = nextMsg && (nextMsg.from?.id === msg.from?.id) && !isDifferentDay(nextMsg.created_time, msg.created_time) && ((new Date(nextMsg.created_time) - new Date(msg.created_time)) < 300000);
+
+            const isGroupStart = !isPrevSame;
+            const isGroupEnd = !isNextSame;
+            const isSingle = isGroupStart && isGroupEnd;
+
+            // Rounded corner classes matching Facebook Messenger
+            let bubbleRoundClass = 'rounded-2xl';
+            if (isFromPage) {
+              if (isSingle) bubbleRoundClass = 'rounded-2xl rounded-br-xs';
+              else if (isGroupStart) bubbleRoundClass = 'rounded-2xl rounded-br-md';
+              else if (isGroupEnd) bubbleRoundClass = 'rounded-2xl rounded-tr-md rounded-br-xs';
+              else bubbleRoundClass = 'rounded-2xl rounded-r-md';
+            } else {
+              if (isSingle) bubbleRoundClass = 'rounded-2xl rounded-bl-xs';
+              else if (isGroupStart) bubbleRoundClass = 'rounded-2xl rounded-bl-md';
+              else if (isGroupEnd) bubbleRoundClass = 'rounded-2xl rounded-tl-md rounded-bl-xs';
+              else bubbleRoundClass = 'rounded-2xl rounded-l-md';
+            }
+
+            const isBigEmojiOrSticker = msg.message === '👍' || msg.is_sticker;
+
             return (
-              <div
-                key={msg.id || idx}
-                className={`flex gap-2.5 max-w-[88%] lg:max-w-[75%] ${isFromPage ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}
-              >
-                {!isFromPage && (
-                  <CustomerAvatar
-                    url={conversation.avatar_url}
-                    name={conversation.customer_name}
-                    size="w-8 h-8"
-                    textClass="text-[11px] font-bold"
-                    className="mt-0.5"
-                  />
+              <React.Fragment key={msg.id || idx}>
+                {/* Date Divider */}
+                {showDateDivider && (
+                  <div className="flex items-center justify-center my-4">
+                    <span className="px-3 py-1 rounded-full bg-slate-200/70 dark:bg-slate-800/80 text-[11px] font-bold text-slate-600 dark:text-slate-300 shadow-2xs">
+                      {formatDateDivider(msg.created_time)}
+                    </span>
+                  </div>
                 )}
 
-                <div className={`space-y-1.5 ${isFromPage ? 'items-end' : 'items-start'} flex flex-col`}>
-                  {msg.message && (
-                    <div
-                      className={`px-4.5 py-3 rounded-2xl text-[15px] sm:text-[15.5px] leading-relaxed whitespace-pre-wrap break-words shadow-xs ${
-                        isFromPage
-                          ? 'bg-brand-500 text-white rounded-br-xs font-normal'
-                          : 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-200/80 dark:border-slate-700/80 rounded-bl-xs'
-                      }`}
-                    >
-                      {msg.message}
+                {/* Message Bubble Row */}
+                <div
+                  className={`flex gap-2 items-end max-w-[90%] sm:max-w-[80%] lg:max-w-[72%] ${
+                    isFromPage ? 'ml-auto flex-row-reverse' : 'mr-auto'
+                  } ${isGroupStart ? 'mt-2.5' : 'mt-0.5'}`}
+                >
+                  {/* Customer Avatar (Rendered only on the last message of the group) */}
+                  {!isFromPage && (
+                    <div className="w-7 sm:w-8 flex-shrink-0">
+                      {isGroupEnd ? (
+                        <CustomerAvatar
+                          url={conversation.avatar_url}
+                          name={conversation.customer_name}
+                          size="w-7 h-7 sm:w-8 sm:h-8"
+                          textClass="text-[10px] sm:text-[11px] font-bold"
+                        />
+                      ) : (
+                        <div className="w-7 sm:w-8 h-1" />
+                      )}
                     </div>
                   )}
 
-                  {/* Attachments */}
-                  {msg.attachments?.data?.map((att, aIdx) => {
-                    const isImg = att.image_data || att.mime_type?.startsWith('image/') || att.file_url?.match(/\.(jpeg|jpg|png|webp|gif)/i);
-                    if (isImg) {
-                      const imgSource = att.image_data?.url || att.file_url;
-                      return (
-                        <div
-                          key={aIdx}
-                          onClick={() => onOpenMediaModal && onOpenMediaModal(imgSource)}
-                          className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 max-w-[280px] cursor-pointer hover:opacity-90 transition-opacity relative group shadow-sm"
-                        >
-                          <img src={imgSource} alt="Attached image" className="w-full h-auto object-cover max-h-72" />
-                          <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-xs font-bold transition-opacity">
-                            🔍 Xem phóng to
-                          </div>
+                  {/* Bubble Content Stack */}
+                  <div className={`space-y-1 ${isFromPage ? 'items-end' : 'items-start'} flex flex-col max-w-full`}>
+                    {/* Quoted Message / Referral (If present) */}
+                    {msg.shares?.data?.map((share, sIdx) => (
+                      <a
+                        key={sIdx}
+                        href={share.link}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800 text-xs border border-slate-200 dark:border-slate-700 hover:border-brand-500 transition-colors block max-w-xs shadow-xs"
+                      >
+                        <div className="flex items-center gap-1.5 text-brand-600 dark:text-brand-400 font-bold mb-0.5">
+                          <Share2 className="w-3.5 h-3.5" />
+                          <span>Bài viết được chia sẻ</span>
                         </div>
-                      );
-                    }
-                    return (
-                      <a key={aIdx} href={att.file_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs sm:text-sm text-brand-600 dark:text-brand-400 font-semibold border border-slate-200 dark:border-slate-700">
-                        <Paperclip className="w-4 h-4" /> Tệp đính kèm
+                        <p className="font-bold text-slate-900 dark:text-white truncate">
+                          {share.name || 'Xem liên kết trên Facebook'}
+                        </p>
+                        {share.description && (
+                          <p className="text-[11px] text-slate-500 line-clamp-2 mt-0.5">
+                            {share.description}
+                          </p>
+                        )}
                       </a>
-                    );
-                  })}
+                    ))}
 
-                  <div className={`text-[11.5px] text-slate-400 px-1 font-medium ${isFromPage ? 'text-right' : 'text-left'}`}>
-                    {formatDateTime(msg.created_time)}
+                    {/* Text Message Bubble */}
+                    {msg.message && (
+                      isBigEmojiOrSticker ? (
+                        <div className="text-3xl sm:text-4xl py-1 px-2 select-none">
+                          {msg.message}
+                        </div>
+                      ) : (
+                        <div
+                          className={`px-3.5 sm:px-4 py-2 sm:py-2.5 text-[14.5px] sm:text-[15px] leading-relaxed whitespace-pre-wrap break-words shadow-2xs ${bubbleRoundClass} ${
+                            isFromPage
+                              ? 'bg-brand-500 text-white font-normal'
+                              : 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-200/70 dark:border-slate-700/70'
+                          }`}
+                        >
+                          {msg.message}
+                        </div>
+                      )
+                    )}
+
+                    {/* Attachments (Photos, Voice Audio, Videos, Documents) */}
+                    {msg.attachments?.data?.map((att, aIdx) => {
+                      const isImg = att.image_data || att.mime_type?.startsWith('image/') || att.file_url?.match(/\.(jpeg|jpg|png|webp|gif)/i);
+                      const isAudio = att.mime_type?.startsWith('audio/') || att.file_url?.match(/\.(mp3|m4a|aac|wav|ogg)/i);
+                      const isVideo = att.mime_type?.startsWith('video/') || att.video_data || att.file_url?.match(/\.(mp4|mov|webm)/i);
+
+                      if (isImg) {
+                        const imgSource = att.image_data?.url || att.file_url;
+                        return (
+                          <div
+                            key={aIdx}
+                            onClick={() => onOpenMediaModal && onOpenMediaModal(imgSource)}
+                            className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 max-w-[280px] cursor-pointer hover:opacity-90 transition-opacity relative group shadow-xs"
+                          >
+                            <img src={imgSource} alt="Attached image" className="w-full h-auto object-cover max-h-72" />
+                            <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-xs font-bold transition-opacity">
+                              🔍 Xem ảnh
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      if (isAudio) {
+                        return (
+                          <div key={aIdx} className="p-2 rounded-2xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center gap-2">
+                            <audio controls src={att.file_url} className="h-8 max-w-[240px]" />
+                          </div>
+                        );
+                      }
+
+                      if (isVideo) {
+                        return (
+                          <div key={aIdx} className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 max-w-[280px]">
+                            <video controls src={att.file_url || att.video_data?.url} className="w-full h-auto max-h-72" />
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <a
+                          key={aIdx}
+                          href={att.file_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs text-brand-600 dark:text-brand-400 font-semibold border border-slate-200 dark:border-slate-700 hover:underline"
+                        >
+                          <FileText className="w-4 h-4" />
+                          <span>{att.name || 'Tệp đính kèm'}</span>
+                        </a>
+                      );
+                    })}
+
+                    {/* Timestamp (Rendered cleanly only on the last message of the group) */}
+                    {isGroupEnd && (
+                      <div className={`text-[10px] sm:text-[11px] text-slate-400 font-medium px-1 ${isFromPage ? 'text-right' : 'text-left'}`}>
+                        {formatMessageTime(msg.created_time)}
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
+              </React.Fragment>
             );
           })
         )}
@@ -434,8 +579,8 @@ export default function ChatThread({
           </div>
         )}
 
-        {/* Input box (1 row sleek) */}
-        <form onSubmit={handleSend} className="relative flex items-center gap-1.5 sm:gap-2">
+        {/* Input box (1 row sleek with Quick Like 👍) */}
+        <form onSubmit={(e) => { e.preventDefault(); handleSend(); }} className="relative flex items-center gap-1.5 sm:gap-2">
           <input
             type="file"
             ref={fileInputRef}
@@ -447,7 +592,7 @@ export default function ChatThread({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="p-2.5 sm:p-3 rounded-xl text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-smooth border border-slate-200/80 dark:border-slate-700/80 flex-shrink-0"
+            className="p-2 sm:p-2.5 rounded-xl text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-smooth border border-slate-200/80 dark:border-slate-700/80 flex-shrink-0"
             title="Đính kèm ảnh / tệp"
           >
             <Image className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -467,18 +612,31 @@ export default function ChatThread({
             className="flex-1 px-3.5 py-2 text-[15px] sm:text-[14px] leading-snug rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-smooth resize-none max-h-24"
           ></textarea>
 
-          <button
-            type="submit"
-            disabled={isSending || (!replyText.trim() && !attachedFile)}
-            className="p-2.5 sm:p-3 rounded-xl bg-brand-500 hover:bg-brand-600 text-white shadow-md shadow-brand-500/20 disabled:opacity-50 disabled:shadow-none transition-smooth flex items-center justify-center flex-shrink-0"
-            title="Gửi tin nhắn"
-          >
-            {isSending ? (
-              <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-            ) : (
-              <Send className="w-4 h-4 sm:w-5 sm:h-5" />
-            )}
-          </button>
+          {/* Send Button or Quick Like 👍 */}
+          {replyText.trim() || attachedFile ? (
+            <button
+              type="submit"
+              disabled={isSending}
+              className="p-2 sm:p-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white shadow-md shadow-brand-500/20 disabled:opacity-50 disabled:shadow-none transition-smooth flex items-center justify-center flex-shrink-0"
+              title="Gửi tin nhắn"
+            >
+              {isSending ? (
+                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+              ) : (
+                <Send className="w-4 h-4 sm:w-5 sm:h-5" />
+              )}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleSendLike}
+              disabled={isSending}
+              className="p-2 sm:p-2.5 rounded-xl text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-950/40 transition-smooth flex items-center justify-center flex-shrink-0 active:scale-90"
+              title="Gửi nút thích 👍"
+            >
+              <ThumbsUp className="w-5 h-5 fill-current" />
+            </button>
+          )}
         </form>
       </div>
     </main>

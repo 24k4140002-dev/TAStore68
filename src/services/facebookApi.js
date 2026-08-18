@@ -440,8 +440,9 @@ export async function fetchAllPagesUnreadSummary(allPages, fbToken) {
 // Fetch messages for a conversation
 export async function fetchConversationMessages(conversationId, pageToken) {
   if (!conversationId || !pageToken) return [];
+  const fields = 'id,created_time,from,message,attachments{id,mime_type,name,size,file_url,image_data,video_data},sticker,shares{id,link,name,description,template},story,reactions';
   const res = await safeFetch(
-    `${API_BASE}/${conversationId}/messages?fields=id,created_time,from,message,attachments{id,mime_type,name,size,file_url,image_data},sticker&limit=100&access_token=${encodeURIComponent(pageToken)}`
+    `${API_BASE}/${conversationId}/messages?fields=${fields}&limit=100&access_token=${encodeURIComponent(pageToken)}`
   );
   const msgs = (res.data || []).reverse();
   msgs.forEach(msg => {
@@ -453,6 +454,18 @@ export async function fetchConversationMessages(conversationId, pageToken) {
     }
   });
   return msgs;
+}
+
+// Mark conversation as read to sync with Meta Business Suite
+export async function markConversationAsRead(conversationId, pageToken) {
+  if (!conversationId || !pageToken) return;
+  try {
+    await safeFetch(`${API_BASE}/${conversationId}?is_read=true&access_token=${encodeURIComponent(pageToken)}`, {
+      method: 'POST'
+    });
+  } catch (e) {
+    // Silently catch
+  }
 }
 
 // Send Messenger message

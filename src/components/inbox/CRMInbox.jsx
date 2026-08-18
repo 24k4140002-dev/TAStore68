@@ -15,6 +15,7 @@ import {
   fetchPages,
   fetchPageConversations,
   fetchConversationMessages,
+  markConversationAsRead,
   sendMessengerMessage,
   sendCommentReply,
   sendPrivateReply,
@@ -372,6 +373,9 @@ function playChimeSound() {
     }
 
     try {
+      // Sync read status with Facebook Meta Business Suite
+      markConversationAsRead(conv.fb_conversation_id, conv.page_token || fbToken);
+
       const msgs = await fetchConversationMessages(conv.fb_conversation_id, conv.page_token || fbToken);
       setMessages(msgs);
       sessionStorage.setItem(`metapost_msgs_${conv.fb_conversation_id}`, JSON.stringify(msgs));
