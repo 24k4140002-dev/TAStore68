@@ -371,7 +371,7 @@ export async function fetchPageConversations(pageId, pageName, pageToken) {
         status: 'open',
         is_starred: false,
         unread_count: effectiveUnread,
-        labels: fbCustomLabels,
+        labels: savedLabels || [],
         reply_deadline: lastMsg?.created_time
           ? new Date(new Date(lastMsg.created_time).getTime() + 24 * 3600 * 1000).toISOString()
           : null

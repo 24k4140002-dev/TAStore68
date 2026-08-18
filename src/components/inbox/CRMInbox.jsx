@@ -186,28 +186,15 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
           }
         }
 
-        // Labels from Facebook Graph API (Meta Business Suite)
-        const fbLabelsForUser = c.customer_psid ? (userLabelsFromFB[c.customer_psid] || []) : [];
-
         // Persistent Customer Labels from localStorage
         const savedLabels = JSON.parse(
           localStorage.getItem(`metapost_labels_${c.fb_conversation_id}`) ||
           (c.customer_psid ? localStorage.getItem(`metapost_labels_${c.customer_psid}`) : null) ||
-          'null'
+          '[]'
         );
 
-        // Merge FB labels + local saved labels
-        const mergedLabels = [...(savedLabels || [])];
-        const existingNames = new Set(mergedLabels.map(l => (l.name || '').toLowerCase().trim()));
-        fbLabelsForUser.forEach(fl => {
-          if (!existingNames.has((fl.name || '').toLowerCase().trim())) {
-            mergedLabels.push(fl);
-          }
-        });
-
-        if (mergedLabels.length > 0) {
-          c.labels = mergedLabels;
-          localStorage.setItem(`metapost_labels_${c.fb_conversation_id}`, JSON.stringify(mergedLabels));
+        if (savedLabels && savedLabels.length > 0) {
+          c.labels = savedLabels;
         }
       });
 
@@ -674,6 +661,10 @@ function playChimeSound() {
           onSelectPage={(pageId) => {
             setSelectedPageId(pageId);
             localStorage.setItem('metapost_selected_page_id', pageId);
+            const targetPages = pageId === 'all'
+              ? (activePages.length > 0 ? activePages : pages)
+              : pages.filter(p => p.id === pageId);
+            loadAllConversations(targetPages);
           }}
           conversations={conversations}
           activeConversation={activeConversation}
