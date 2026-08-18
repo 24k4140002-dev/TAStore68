@@ -89,6 +89,7 @@ export default function ChatThread({
   const [attachedFile, setAttachedFile] = useState(null);
   const [attachedFilePreview, setAttachedFilePreview] = useState(null);
   const [isSending, setIsSending] = useState(false);
+  const [shortcutQuery, setShortcutQuery] = useState(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const scrollContainerRef = useRef(null);
