@@ -933,3 +933,208 @@ Bạn muốn in Tên & Số gì nhắn shop lên demo cho bạn xem trước nha
     text: `Shop đã ghi nhận đơn hàng của bạn thành công! Đơn sẽ được kiểm tra kỹ và gửi đi sớm nhất. Khi nhận được hàng bạn mặc thử có bất kỳ vấn đề gì cứ nhắn shop hỗ trợ đổi size miễn phí nhé. Chúc bạn một ngày tràn đầy năng lượng! ❤️`
   }
 ];
+
+// ==========================================
+// 📊 FACEBOOK MARKETING & ADS API HELPERS
+// ==========================================
+
+/**
+ * Fetch all Ad Accounts connected to this Facebook token
+ */
+export async function fetchAdAccounts(token) {
+  const clean = cleanFacebookToken(token);
+  if (!clean) return [];
+  try {
+    const res = await fetch(
+      `${API_BASE}/me/adaccounts?fields=id,name,account_id,account_status,currency,amount_spent,balance,spend_cap&limit=50&access_token=${clean}`
+    );
+    const data = await res.json();
+    if (data.error) {
+      console.warn('Fetch ad accounts error:', data.error);
+      return { error: data.error };
+    }
+    return data.data || [];
+  } catch (err) {
+    console.error('fetchAdAccounts network error:', err);
+    return { error: { message: err.message } };
+  }
+}
+
+/**
+ * Extract Messaging conversations count & Cost per message from Facebook Insights
+ */
+export function extractMessagingStats(actions = [], costPerAction = [], totalSpend = 0) {
+  let messagingCount = 0;
+  let costPerMessage = 0;
+
+  if (Array.isArray(actions)) {
+    const msgAction = actions.find(a => 
+      a.action_type === 'onsite_conversion.messaging_conversation_started_7d' ||
+      a.action_type === 'onsite_conversion.messaging_first_reply' ||
+      a.action_type === 'onsite_conversion.total_messaging_connection'
+    );
+    if (msgAction) {
+      messagingCount = parseInt(msgAction.value, 10) || 0;
+    }
+  }
+
+  if (Array.isArray(costPerAction)) {
+    const msgCost = costPerAction.find(a => 
+      a.action_type === 'onsite_conversion.messaging_conversation_started_7d' ||
+      a.action_type === 'onsite_conversion.messaging_first_reply' ||
+      a.action_type === 'onsite_conversion.total_messaging_connection'
+    );
+    if (msgCost) {
+      costPerMessage = parseFloat(msgCost.value) || 0;
+    }
+  }
+
+  // Fallback calculation if cost_per_action_type was omitted by FB API
+  if (costPerMessage === 0 && messagingCount > 0 && totalSpend > 0) {
+    costPerMessage = Math.round(totalSpend / messagingCount);
+  }
+
+  return { messagingCount, costPerMessage };
+}
+
+/**
+ * Fetch Account-level High-level Insights (Spend, Impressions, Clicks, CPC, CPM, CTR)
+ */
+export async function fetchAdAccountInsights(adAccountId, token, datePreset = 'today') {
+  const clean = cleanFacebookToken(token);
+  if (!clean || !adAccountId) return null;
+  try {
+    const res = await fetch(
+      `${API_BASE}/${adAccountId}/insights?fields=spend,impressions,clicks,cpc,cpm,ctr,reach,actions,cost_per_action_type&date_preset=${datePreset}&access_token=${clean}`
+    );
+    const data = await res.json();
+    if (data.error) return { error: data.error };
+    
+    const insight = data.data?.[0] || null;
+    if (!insight) {
+      return {
+        spend: 0,
+        impressions: 0,
+        clicks: 0,
+        cpc: 0,
+        cpm: 0,
+        ctr: 0,
+        reach: 0,
+        messagingCount: 0,
+        costPerMessage: 0
+      };
+    }
+
+    const spend = parseFloat(insight.spend || 0);
+    const { messagingCount, costPerMessage } = extractMessagingStats(
+      insight.actions,
+      insight.cost_per_action_type,
+      spend
+    );
+
+    return {
+      spend,
+      impressions: parseInt(insight.impressions || 0, 10),
+      clicks: parseInt(insight.clicks || 0, 10),
+      reach: parseInt(insight.reach || 0, 10),
+      cpc: parseFloat(insight.cpc || 0),
+      cpm: parseFloat(insight.cpm || 0),
+      ctr: parseFloat(insight.ctr || 0),
+      messagingCount,
+      costPerMessage
+    };
+  } catch (err) {
+    console.error('fetchAdAccountInsights error:', err);
+    return { error: { message: err.message } };
+  }
+}
+
+/**
+ * Fetch Campaigns with their Insights for specific date preset
+ */
+export async function fetchCampaignsWithInsights(adAccountId, token, datePreset = 'today') {
+  const clean = cleanFacebookToken(token);
+  if (!clean || !adAccountId) return [];
+  try {
+    const fields = `id,name,status,objective,daily_budget,lifetime_budget,start_time,stop_time,insights.date_preset(${datePreset}){spend,impressions,clicks,cpc,cpm,ctr,reach,actions,cost_per_action_type}`;
+    const res = await fetch(
+      `${API_BASE}/${adAccountId}/campaigns?fields=${fields}&limit=50&access_token=${clean}`
+    );
+    const data = await res.json();
+    if (data.error) return { error: data.error };
+
+    const rawList = data.data || [];
+    return rawList.map(camp => {
+      const insight = camp.insights?.data?.[0] || null;
+      const spend = insight ? parseFloat(insight.spend || 0) : 0;
+      const { messagingCount, costPerMessage } = extractMessagingStats(
+        insight?.actions,
+        insight?.cost_per_action_type,
+        spend
+      );
+
+      return {
+        id: camp.id,
+        name: camp.name,
+        status: camp.status, // 'ACTIVE' | 'PAUSED' | 'ARCHIVED'
+        objective: camp.objective,
+        daily_budget: camp.daily_budget ? parseInt(camp.daily_budget, 10) / 100 : null, // FB returns in cents / hundredths
+        lifetime_budget: camp.lifetime_budget ? parseInt(camp.lifetime_budget, 10) / 100 : null,
+        spend,
+        impressions: insight ? parseInt(insight.impressions || 0, 10) : 0,
+        clicks: insight ? parseInt(insight.clicks || 0, 10) : 0,
+        reach: insight ? parseInt(insight.reach || 0, 10) : 0,
+        cpc: insight ? parseFloat(insight.cpc || 0) : 0,
+        cpm: insight ? parseFloat(insight.cpm || 0) : 0,
+        ctr: insight ? parseFloat(insight.ctr || 0) : 0,
+        messagingCount,
+        costPerMessage
+      };
+    });
+  } catch (err) {
+    console.error('fetchCampaignsWithInsights error:', err);
+    return { error: { message: err.message } };
+  }
+}
+
+/**
+ * Toggle Campaign Status (ACTIVE <-> PAUSED)
+ */
+export async function toggleCampaignStatus(campaignId, newStatus, token) {
+  const clean = cleanFacebookToken(token);
+  if (!clean || !campaignId) throw new Error('Missing token or campaign ID');
+
+  const formData = new URLSearchParams();
+  formData.append('status', newStatus);
+  formData.append('access_token', clean);
+
+  const res = await fetch(`${API_BASE}/${campaignId}`, {
+    method: 'POST',
+    body: formData
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message || 'Lỗi cập nhật chiến dịch');
+  return data;
+}
+
+/**
+ * Update Campaign Daily Budget
+ */
+export async function updateCampaignBudget(campaignId, dailyBudgetVnd, token) {
+  const clean = cleanFacebookToken(token);
+  if (!clean || !campaignId) throw new Error('Missing token or campaign ID');
+
+  const formData = new URLSearchParams();
+  // Facebook API expects budget in cents / smallest currency unit (for VND, 1 VND = 100 hundredths)
+  formData.append('daily_budget', Math.round(dailyBudgetVnd * 100));
+  formData.append('access_token', clean);
+
+  const res = await fetch(`${API_BASE}/${campaignId}`, {
+    method: 'POST',
+    body: formData
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message || 'Lỗi cập nhật ngân sách');
+  return data;
+}
+

@@ -202,14 +202,24 @@ export default function ConversationSidebar({
 
           <div className="flex items-center gap-1">
             {onSwitchTab && (
-              <button
-                type="button"
-                onClick={() => onSwitchTab('post')}
-                className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-200 flex items-center gap-1"
-                title="Chuyển sang Đăng Bài Đa Page"
-              >
-                <span>📝 Đăng bài</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => onSwitchTab('post')}
+                  className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-200 flex items-center gap-1"
+                  title="Chuyển sang Đăng Bài Đa Page"
+                >
+                  <span>📝 Đăng bài</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSwitchTab('ads')}
+                  className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-purple-600 dark:text-purple-400 hover:bg-slate-200 flex items-center gap-1"
+                  title="Chuyển sang Báo Cáo Ads"
+                >
+                  <span>📊 Ads</span>
+                </button>
+              </>
             )}
             {onOpenTokenModal && (
               <button

@@ -11,16 +11,18 @@ import {
   CheckCircle2,
   Database,
   Maximize2,
-  Minimize2
+  Minimize2,
+  TrendingUp
 } from 'lucide-react';
 import CRMInbox from './components/inbox/CRMInbox';
 import { cleanFacebookToken } from './services/facebookApi';
 
 const PostStudio = lazy(() => import('./components/post/PostStudio'));
+const AdsStudio = lazy(() => import('./components/ads/AdsStudio'));
 const TokenModal = lazy(() => import('./components/common/TokenModal'));
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('inbox'); // 'inbox' | 'post'
+  const [activeTab, setActiveTab] = useState('inbox'); // 'inbox' | 'post' | 'ads'
   const [fbToken, setFbToken] = useState(() => cleanFacebookToken(localStorage.getItem('metapost_fb_token') || ''));
   const [theme, setTheme] = useState(() => localStorage.getItem('metapost_theme') || 'light');
   const [isTokenModalOpen, setIsTokenModalOpen] = useState(false);
@@ -137,6 +139,17 @@ export default function App() {
               <Send className="w-3.5 h-3.5 text-emerald-500" />
               <span>Đăng Bài Đa Page</span>
             </button>
+            <button
+              onClick={() => setActiveTab('ads')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-smooth ${
+                activeTab === 'ads'
+                  ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <TrendingUp className="w-3.5 h-3.5 text-purple-500" />
+              <span>Báo Cáo Ads</span>
+            </button>
           </nav>
         </div>
 
@@ -208,8 +221,15 @@ export default function App() {
             activeTab={activeTab}
             onSwitchTab={setActiveTab}
           />
-        ) : (
+        ) : activeTab === 'post' ? (
           <PostStudio
+            fbToken={fbToken}
+            onOpenTokenModal={() => setIsTokenModalOpen(true)}
+            activeTab={activeTab}
+            onSwitchTab={setActiveTab}
+          />
+        ) : (
+          <AdsStudio
             fbToken={fbToken}
             onOpenTokenModal={() => setIsTokenModalOpen(true)}
             activeTab={activeTab}

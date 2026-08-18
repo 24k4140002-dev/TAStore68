@@ -29,7 +29,7 @@ import {
   getPageDisplayName
 } from '../../services/facebookApi';
 
-export default function PostStudio({ fbToken, onOpenTokenModal }) {
+export default function PostStudio({ fbToken, onOpenTokenModal, activeTab, onSwitchTab }) {
   const [pages, setPages] = useState(() => JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]'));
   const [selectedPageIds, setSelectedPageIds] = useState([]);
   const [postType, setPostType] = useState('photo'); // 'photo' | 'text' | 'video'
@@ -314,6 +314,45 @@ export default function PostStudio({ fbToken, onOpenTokenModal }) {
 
   return (
     <div className="flex-1 flex flex-col md:flex-row overflow-hidden h-full bg-slate-50 dark:bg-slate-950">
+      {/* Mobile Top App Navigation (When global header is hidden on mobile) */}
+      <div className="md:hidden flex items-center justify-between gap-2 p-2.5 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex-shrink-0">
+        <div className="flex items-center gap-1.5">
+          <span className="font-extrabold text-xs text-brand-600 dark:text-brand-400">TAStore68</span>
+          <span className="px-1.5 py-0.2 rounded bg-brand-50 dark:bg-brand-950 text-[10px] font-black text-brand-600 border border-brand-200/50">PRO</span>
+        </div>
+
+        <div className="flex items-center gap-1">
+          {onSwitchTab && (
+            <>
+              <button
+                type="button"
+                onClick={() => onSwitchTab('inbox')}
+                className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-200"
+              >
+                💬 Inbox
+              </button>
+              <button
+                type="button"
+                onClick={() => onSwitchTab('ads')}
+                className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-purple-600 dark:text-purple-400 hover:bg-slate-200"
+              >
+                📊 Ads
+              </button>
+            </>
+          )}
+          {onOpenTokenModal && (
+            <button
+              type="button"
+              onClick={onOpenTokenModal}
+              className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-amber-500 hover:bg-slate-200 text-xs"
+              title="Quản lý Token"
+            >
+              🔑
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Mobile Tab Switcher */}
       <div className="md:hidden flex items-center border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-1.5 gap-1.5 flex-shrink-0">
         <button
