@@ -437,34 +437,51 @@ export async function fetchAllPagesUnreadSummary(allPages, fbToken) {
   return { total, perPage };
 }
 
-// Fetch messages for a conversation
+// Fetch messages for a conversation with bulletproof fallback
 export async function fetchConversationMessages(conversationId, pageToken) {
   if (!conversationId || !pageToken) return [];
-  const fields = 'id,created_time,from,message,attachments{id,mime_type,name,size,file_url,image_data,video_data},sticker,shares{id,link,name,description,template},story,reactions';
-  const res = await safeFetch(
-    `${API_BASE}/${conversationId}/messages?fields=${fields}&limit=100&access_token=${encodeURIComponent(pageToken)}`
-  );
-  const msgs = (res.data || []).reverse();
-  msgs.forEach(msg => {
-    if (msg.sticker) {
-      msg.is_sticker = true;
-      if (msg.attachments?.data) {
-        msg.attachments.data.forEach(a => { a.is_sticker = true; });
-      }
+  try {
+    const res = await safeFetch(
+      `${API_BASE}/${conversationId}/messages?fields=id,created_time,from,message,attachments{id,mime_type,name,size,file_url,image_data},sticker,shares&limit=100&access_token=${encodeURIComponent(pageToken)}`
+    );
+    if (res && Array.isArray(res.data)) {
+      const msgs = [...res.data].reverse();
+      msgs.forEach(msg => {
+        if (msg.sticker) {
+          msg.is_sticker = true;
+          if (msg.attachments?.data) {
+            msg.attachments.data.forEach(a => { a.is_sticker = true; });
+          }
+        }
+      });
+      return msgs;
     }
-  });
-  return msgs;
+  } catch (e) {
+    console.warn('Extended fetch failed, trying standard fields:', e);
+  }
+
+  // Fallback to minimal core fields
+  try {
+    const res = await safeFetch(
+      `${API_BASE}/${conversationId}/messages?fields=id,created_time,from,message,attachments{id,mime_type,file_url,image_data},sticker&limit=100&access_token=${encodeURIComponent(pageToken)}`
+    );
+    const msgs = (res?.data || []).reverse();
+    return msgs;
+  } catch (err) {
+    console.error('fetchConversationMessages error:', err);
+    return [];
+  }
 }
 
-// Mark conversation as read to sync with Meta Business Suite
+// Mark conversation as read to sync with Meta Business Suite (Non-blocking)
 export async function markConversationAsRead(conversationId, pageToken) {
   if (!conversationId || !pageToken) return;
   try {
-    await safeFetch(`${API_BASE}/${conversationId}?is_read=true&access_token=${encodeURIComponent(pageToken)}`, {
+    fetch(`${API_BASE}/${conversationId}?is_read=true&access_token=${encodeURIComponent(pageToken)}`, {
       method: 'POST'
-    });
-  } catch (e) {
-    // Silently catch
+    }).catch(() => {});
+  } catch {
+    // Non-blocking
   }
 }
 
