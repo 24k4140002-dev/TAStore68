@@ -89,19 +89,38 @@ export default function ChatThread({
   const [attachedFile, setAttachedFile] = useState(null);
   const [attachedFilePreview, setAttachedFilePreview] = useState(null);
   const [isSending, setIsSending] = useState(false);
-  const [shortcutQuery, setShortcutQuery] = useState(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
-
+  const scrollContainerRef = useRef(null);
+  const prevScrollHeightRef = useRef(0);
   const prevLengthRef = useRef(messages.length);
 
   useEffect(() => {
+    // Maintain scroll position when older messages are prepended to top
+    if (scrollContainerRef.current && prevScrollHeightRef.current > 0) {
+      const diff = scrollContainerRef.current.scrollHeight - prevScrollHeightRef.current;
+      if (diff > 0) {
+        scrollContainerRef.current.scrollTop = diff;
+      }
+      prevScrollHeightRef.current = 0;
+      prevLengthRef.current = messages.length;
+      return;
+    }
+
     // Only auto-scroll to bottom on first load or when sending/receiving new message at bottom
     if (messages.length > prevLengthRef.current && !isLoadingOlderMessages) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
     }
     prevLengthRef.current = messages.length;
   }, [messages, isLoadingOlderMessages]);
+
+  const handleScroll = (e) => {
+    const container = e.currentTarget;
+    if (container.scrollTop < 80 && hasMoreOlderMessages && !isLoadingOlderMessages && onLoadOlderMessages) {
+      prevScrollHeightRef.current = container.scrollHeight;
+      onLoadOlderMessages();
+    }
+  };
 
   const handleFileChange = (e) => {
     const file = e.target.files[0];
@@ -287,8 +306,12 @@ export default function ChatThread({
         </div>
       </div>
 
-      {/* Messages Scroll Area (With Messenger-style Consecutive Grouping) */}
-      <div className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-6 space-y-1 touch-scroll-y overscroll-contain">
+      {/* Messages Scroll Area (With Messenger-style Consecutive Grouping & Infinite Scroll) */}
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-6 space-y-1 touch-scroll-y overscroll-contain"
+      >
         {isLoadingMessages ? (
           <div className="h-full flex flex-col items-center justify-center text-slate-400">
             <div className="w-8 h-8 border-3 border-brand-500 border-t-transparent rounded-full animate-spin mb-3"></div>
@@ -302,27 +325,10 @@ export default function ChatThread({
           </div>
         ) : (
           <>
-            {/* Load Older Messages Button (Yesterday, Last Week, etc.) */}
-            {hasMoreOlderMessages && (
+            {/* Top Loading Indicator on Scroll Up */}
+            {isLoadingOlderMessages && (
               <div className="flex justify-center py-2">
-                <button
-                  type="button"
-                  onClick={onLoadOlderMessages}
-                  disabled={isLoadingOlderMessages}
-                  className="px-3.5 py-1.5 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold border border-slate-200 dark:border-slate-700 transition-smooth shadow-xs flex items-center gap-1.5 active:scale-95"
-                >
-                  {isLoadingOlderMessages ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin"></div>
-                      <span>Đang tải tin nhắn cũ...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Clock className="w-3.5 h-3.5 text-brand-500" />
-                      <span>Tải tin nhắn cũ hơn (Hôm qua, Tuần trước)</span>
-                    </>
-                  )}
-                </button>
+                <div className="w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin"></div>
               </div>
             )}
 

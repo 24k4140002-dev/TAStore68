@@ -437,8 +437,8 @@ export async function fetchAllPagesUnreadSummary(allPages, fbToken) {
   return { total, perPage };
 }
 
-// Fetch messages for a conversation (Ultra-fast direct fetch with 80-message default and pagination)
-export async function fetchConversationMessages(conversationId, pageToken, cursor = null, limit = 80) {
+// Fetch messages for a conversation (Ultra-fast direct fetch with 100-message default and pagination)
+export async function fetchConversationMessages(conversationId, pageToken, cursor = null, limit = 100) {
   if (!conversationId || !pageToken) return [];
   try {
     let url = `${API_BASE}/${conversationId}/messages?fields=id,created_time,from,message,attachments{id,mime_type,name,size,file_url,image_data},sticker&limit=${limit}&access_token=${encodeURIComponent(pageToken)}`;
