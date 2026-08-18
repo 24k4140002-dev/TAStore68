@@ -29,7 +29,6 @@ import {
   runInChunks,
   DEFAULT_QUICK_REPLIES
 } from '../../services/facebookApi';
-import { supabase } from '../../services/supabaseClient';
 
 // Default Meta Business Suite standard labels
 const DEFAULT_META_LABELS = [
@@ -345,23 +344,17 @@ function playChimeSound() {
       const savedOrders = JSON.parse(localStorage.getItem(`orders_${conv.customer_psid}`) || '[]');
       setCustomerOrders(savedOrders);
 
-      // Fetch customer notes from Supabase
+      // Load customer notes & contact info from localStorage
       if (conv.customer_psid) {
-        try {
-          const { data: cust } = await supabase
-            .from('customers')
-            .select('id, phone, email, notes(id, note_text, created_at)')
-            .eq('psid', conv.customer_psid)
-            .maybeSingle();
-
-          if (cust) {
-            setCustomerCRMData(cust);
-          } else {
-            setCustomerCRMData({ phone: '', email: '', notes: [] });
-          }
-        } catch (e) {
-          setCustomerCRMData({ phone: '', email: '', notes: [] });
-        }
+        const savedCust = JSON.parse(localStorage.getItem(`metapost_cust_${conv.customer_psid}`) || '{}');
+        const savedNotes = JSON.parse(localStorage.getItem(`metapost_notes_${conv.customer_psid}`) || '[]');
+        setCustomerCRMData({
+          phone: savedCust.phone || '',
+          email: savedCust.email || '',
+          notes: savedNotes
+        });
+      } else {
+        setCustomerCRMData({ phone: '', email: '', notes: [] });
       }
     } catch (err) {
       console.error('Load messages error:', err);
@@ -558,17 +551,26 @@ function playChimeSound() {
   const handleAddNote = async (text) => {
     if (!activeConversation?.customer_psid) return;
     const newNote = { id: 'note_' + Date.now(), note_text: text, created_at: new Date().toISOString() };
-    setCustomerCRMData(prev => ({
-      ...prev,
-      notes: [newNote, ...(prev?.notes || [])]
-    }));
+    setCustomerCRMData(prev => {
+      const updatedNotes = [newNote, ...(prev?.notes || [])];
+      localStorage.setItem(`metapost_notes_${activeConversation.customer_psid}`, JSON.stringify(updatedNotes));
+      return {
+        ...prev,
+        notes: updatedNotes
+      };
+    });
   };
 
   const handleDeleteNote = (noteId) => {
-    setCustomerCRMData(prev => ({
-      ...prev,
-      notes: (prev?.notes || []).filter(n => n.id !== noteId)
-    }));
+    if (!activeConversation?.customer_psid) return;
+    setCustomerCRMData(prev => {
+      const updatedNotes = (prev?.notes || []).filter(n => n.id !== noteId);
+      localStorage.setItem(`metapost_notes_${activeConversation.customer_psid}`, JSON.stringify(updatedNotes));
+      return {
+        ...prev,
+        notes: updatedNotes
+      };
+    });
   };
 
   // 11. Orders

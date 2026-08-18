@@ -232,12 +232,12 @@ export async function fetchPages(fbToken) {
   return enriched;
 }
 
-// Fetch conversations for a specific page with participant avatars, snippet & Meta custom labels
+// Fetch conversations for a specific page with participant avatars & snippet
 export async function fetchPageConversations(pageId, pageName, pageToken) {
   if (!pageId || !pageToken) return [];
   try {
     const res = await safeFetch(
-      `${API_BASE}/${pageId}/conversations?fields=id,updated_time,unread_count,custom_labels{id,name,page_label_name},participants{id,name,picture{data{url}}},can_reply,messages.limit(1){id,message,created_time,from,attachments{mime_type,file_url,image_data}}&limit=30&access_token=${encodeURIComponent(pageToken)}`
+      `${API_BASE}/${pageId}/conversations?fields=id,updated_time,unread_count,participants{id,name,picture{data{url}}},can_reply,messages.limit(1){id,message,created_time,from,attachments{mime_type,file_url,image_data}}&limit=30&access_token=${encodeURIComponent(pageToken)}`
     );
 
     if (!res.data) return [];
@@ -257,13 +257,15 @@ export async function fetchPageConversations(pageId, pageName, pageToken) {
         ? `${API_BASE}/${customerPsid}/picture?type=square&height=100&width=100&access_token=${encodeURIComponent(pageToken)}`
         : '');
 
-      // Parse Meta native custom labels from Graph API
-      const fbCustomLabels = (conv.custom_labels?.data || []).map(l => ({
-        id: l.id,
-        name: l.name || l.page_label_name,
-        emoji: '🏷️',
-        color: '#3b82f6'
-      }));
+      // Load saved local labels for this conversation or customer
+      let savedLabels = [];
+      try {
+        savedLabels = JSON.parse(
+          localStorage.getItem(`metapost_labels_${conv.id}`) ||
+          localStorage.getItem(`metapost_labels_${customerPsid}`) ||
+          '[]'
+        );
+      } catch {}
 
       // Unread logic:
       // 1. If user previously viewed this conversation (in readMap), check if a NEW message arrived after read timestamp
@@ -458,7 +460,7 @@ export function getColorForLabel(name = '') {
   return '#64748b'; // Slate
 }
 
-// Fetch custom labels from Facebook Page along with users that have them
+// Fetch custom labels from Facebook Page along with users that have them (silent fallback)
 export async function fetchPageLabelsWithUsers(pageId, pageToken) {
   if (!pageId || !pageToken) return { labels: [], userLabelsMap: {} };
   try {
@@ -486,8 +488,7 @@ export async function fetchPageLabelsWithUsers(pageId, pageToken) {
     });
 
     return { labels, userLabelsMap };
-  } catch (e) {
-    console.warn('Fetch page labels with users error:', e.message);
+  } catch {
     return { labels: [], userLabelsMap: {} };
   }
 }

@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
 import { X, Tag, Plus, Trash2, Palette } from 'lucide-react';
-import { supabase } from '../../services/supabaseClient';
 
 const PRESET_COLORS = [
   '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#ef4444', '#06b6d4', '#64748b'
 ];
 
-export default function LabelsManagerModal({ allLabels, allTags, onLabelsChange, onTagsChange, onClose }) {
+export default function LabelsManagerModal({ allLabels, allTags = [], onLabelsChange, onTagsChange, onClose }) {
   const [activeTab, setActiveTab] = useState('labels');
   const [newLabelName, setNewLabelName] = useState('');
   const [newLabelEmoji, setNewLabelEmoji] = useState('🏷️');
@@ -16,76 +15,52 @@ export default function LabelsManagerModal({ allLabels, allTags, onLabelsChange,
   const [newTagColor, setNewTagColor] = useState(PRESET_COLORS[2]);
   const [loading, setLoading] = useState(false);
 
-  const handleCreateLabel = async (e) => {
+  const handleCreateLabel = (e) => {
     e.preventDefault();
     if (!newLabelName.trim()) return;
 
-    setLoading(true);
-    try {
-      const labelObj = {
-        name: newLabelName.trim(),
-        emoji: newLabelEmoji.trim() || '🏷️',
-        color: newLabelColor,
-        sort_order: (allLabels?.length || 0) + 1
-      };
+    const labelObj = {
+      id: 'lbl_' + Date.now(),
+      name: newLabelName.trim(),
+      emoji: newLabelEmoji.trim() || '🏷️',
+      color: newLabelColor,
+      sort_order: (allLabels?.length || 0) + 1
+    };
 
-      const { data, error } = await supabase.from('labels').insert([labelObj]).select();
-      if (error) throw error;
-
-      if (data && data[0]) {
-        onLabelsChange([...allLabels, data[0]]);
-        setNewLabelName('');
-      }
-    } catch (err) {
-      alert('Lỗi tạo nhãn: ' + err.message);
-    } finally {
-      setLoading(false);
-    }
+    const updated = [...allLabels, labelObj];
+    onLabelsChange(updated);
+    localStorage.setItem('metapost_all_labels', JSON.stringify(updated));
+    setNewLabelName('');
   };
 
-  const handleDeleteLabel = async (id) => {
+  const handleDeleteLabel = (id) => {
     if (!confirm('Bạn có chắc muốn xoá nhãn này?')) return;
-    try {
-      await supabase.from('labels').delete().eq('id', id);
-      onLabelsChange(allLabels.filter(l => l.id !== id));
-    } catch (err) {
-      alert('Lỗi xoá nhãn: ' + err.message);
-    }
+    const updated = allLabels.filter(l => l.id !== id);
+    onLabelsChange(updated);
+    localStorage.setItem('metapost_all_labels', JSON.stringify(updated));
   };
 
-  const handleCreateTag = async (e) => {
+  const handleCreateTag = (e) => {
     e.preventDefault();
     if (!newTagName.trim()) return;
 
-    setLoading(true);
-    try {
-      const tagObj = {
-        name: newTagName.trim().replace(/^#/, ''),
-        color: newTagColor
-      };
+    const tagObj = {
+      id: 'tag_' + Date.now(),
+      name: newTagName.trim().replace(/^#/, ''),
+      color: newTagColor
+    };
 
-      const { data, error } = await supabase.from('tags').insert([tagObj]).select();
-      if (error) throw error;
-
-      if (data && data[0]) {
-        onTagsChange([...allTags, data[0]]);
-        setNewTagName('');
-      }
-    } catch (err) {
-      alert('Lỗi tạo tag: ' + err.message);
-    } finally {
-      setLoading(false);
-    }
+    const updated = [...allTags, tagObj];
+    onTagsChange && onTagsChange(updated);
+    localStorage.setItem('metapost_all_tags', JSON.stringify(updated));
+    setNewTagName('');
   };
 
-  const handleDeleteTag = async (id) => {
+  const handleDeleteTag = (id) => {
     if (!confirm('Bạn có chắc muốn xoá tag này?')) return;
-    try {
-      await supabase.from('tags').delete().eq('id', id);
-      onTagsChange(allTags.filter(t => t.id !== id));
-    } catch (err) {
-      alert('Lỗi xoá tag: ' + err.message);
-    }
+    const updated = allTags.filter(t => t.id !== id);
+    onTagsChange && onTagsChange(updated);
+    localStorage.setItem('metapost_all_tags', JSON.stringify(updated));
   };
 
   return (
