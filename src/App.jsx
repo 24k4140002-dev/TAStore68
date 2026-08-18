@@ -23,6 +23,7 @@ import {
   registerServiceWorker,
   requestNotificationPermission,
   playNotificationChime,
+  triggerNewMessageNotification,
   isNotificationSupported
 } from './services/notificationService';
 
@@ -67,14 +68,15 @@ export default function App() {
   }, []);
 
   const handleToggleNotification = async () => {
-    playNotificationChime();
     const perm = await requestNotificationPermission();
     setNotifPermission(perm);
-    if (perm === 'granted') {
-      alert('🔔 Đã bật thông báo màn hình khóa & chuông Ting Ting thành công!');
-    } else if (perm === 'denied') {
-      alert('⚠️ Bạn đã chặn thông báo trong cài đặt trình duyệt. Hãy vào Cài đặt Safari/Chrome để bật lại.');
-    }
+    await triggerNewMessageNotification({
+      pageId: 'all',
+      pageName: 'TAStore68 Pro',
+      customerName: 'Hệ Thống Thông Báo',
+      messageText: '🔔 Chuông báo Ting Ting và thông báo màn hình khóa đã sẵn sàng!',
+      playSound: true
+    });
   };
 
   const toggleFocusMode = () => {

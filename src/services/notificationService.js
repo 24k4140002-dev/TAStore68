@@ -1,18 +1,101 @@
-// Web Audio API Crystal Clear "Ting Ting" Chime Synthesizer (0 dependencies, 0 latency)
-let audioCtx = null;
+// TAStore68 Pro — Notification Service with Web Audio API + HTML5 Audio Fallback & Web Push
 
-function getAudioContext() {
-  if (typeof window === 'undefined') return null;
-  if (!audioCtx) {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (AudioContextClass) {
-      audioCtx = new AudioContextClass();
+let audioCtx = null;
+let isAudioUnlocked = false;
+
+// Generate 0.5s crystal dual-tone "Ting Ting" Bell chime (WAV PCM Base64 Data URI)
+function generateChimeDataUri() {
+  const sampleRate = 22050;
+  const duration = 0.45;
+  const numSamples = Math.floor(sampleRate * duration);
+  const buffer = new ArrayBuffer(44 + numSamples * 2);
+  const view = new DataView(buffer);
+
+  // WAV Header
+  function writeString(offset, string) {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
     }
   }
-  if (audioCtx && audioCtx.state === 'suspended') {
-    audioCtx.resume().catch(() => {});
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + numSamples * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true); // PCM chunk size
+  view.setUint16(20, 1, true);  // Audio format 1 (PCM)
+  view.setUint16(22, 1, true);  // Mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // Byte rate
+  view.setUint16(32, 2, true);  // Block align
+  view.setUint16(34, 16, true); // 16-bit
+  writeString(36, 'data');
+  view.setUint32(40, numSamples * 2, true);
+
+  // Generate Samples: Tone 1 (1318 Hz E6) + Tone 2 (1760 Hz A6) with exponential decay
+  for (let i = 0; i < numSamples; i++) {
+    const t = i / sampleRate;
+    let sample = 0;
+
+    // Tone 1 at t=0
+    if (t < 0.3) {
+      const decay1 = Math.exp(-t * 12);
+      sample += Math.sin(2 * Math.PI * 1318.51 * t) * 0.45 * decay1;
+    }
+
+    // Tone 2 at t >= 0.08
+    if (t >= 0.08) {
+      const t2 = t - 0.08;
+      const decay2 = Math.exp(-t2 * 10);
+      sample += Math.sin(2 * Math.PI * 1760.00 * t2) * 0.55 * decay2;
+    }
+
+    // Clamp to 16-bit PCM
+    const clamped = Math.max(-1, Math.min(1, sample));
+    const pcm = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
+    view.setInt16(44 + i * 2, pcm, true);
   }
-  return audioCtx;
+
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return 'data:audio/wav;base64,' + btoa(binary);
+}
+
+const CHIME_DATA_URI = generateChimeDataUri();
+
+// Audio Unlocker for iOS Safari & Android
+export function unlockAudio() {
+  if (isAudioUnlocked) return;
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass && !audioCtx) {
+      audioCtx = new AudioContextClass();
+    }
+    if (audioCtx) {
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+      // Play a short silent buffer to unlock iOS audio pipeline
+      const buffer = audioCtx.createBuffer(1, 1, 22050);
+      const source = audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioCtx.destination);
+      source.start(0);
+    }
+    isAudioUnlocked = true;
+  } catch (e) {
+    console.warn('Audio unlock error:', e);
+  }
+}
+
+// Auto-unlock on first user tap anywhere on the screen
+if (typeof window !== 'undefined') {
+  ['click', 'touchstart', 'touchend', 'keydown'].forEach(evt => {
+    window.addEventListener(evt, unlockAudio, { once: true, passive: true });
+  });
 }
 
 /**
@@ -20,39 +103,50 @@ function getAudioContext() {
  */
 export function playNotificationChime() {
   try {
-    const ctx = getAudioContext();
-    if (!ctx) return;
+    unlockAudio();
 
+    // 1. Primary: HTML5 Audio with Base64 data URI (Works 100% on iOS & Android background/foreground)
+    const audio = new Audio(CHIME_DATA_URI);
+    audio.volume = 0.85;
+    const playPromise = audio.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(() => {
+        // Fallback: Web Audio API
+        if (audioCtx && audioCtx.state === 'running') {
+          playWebAudioChime(audioCtx);
+        }
+      });
+    }
+  } catch (e) {
+    console.warn('Play chime error:', e);
+  }
+}
+
+function playWebAudioChime(ctx) {
+  try {
     const now = ctx.currentTime;
-
-    // Tone 1: High crisp Bell (F6 - 1396.91 Hz)
     const osc1 = ctx.createOscillator();
     const gain1 = ctx.createGain();
     osc1.type = 'sine';
-    osc1.frequency.setValueAtTime(1318.51, now); // E6
-    gain1.gain.setValueAtTime(0.35, now);
+    osc1.frequency.setValueAtTime(1318.51, now);
+    gain1.gain.setValueAtTime(0.4, now);
     gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
-
     osc1.connect(gain1);
     gain1.connect(ctx.destination);
     osc1.start(now);
     osc1.stop(now + 0.36);
 
-    // Tone 2: Bright Sweet Chime (A6 - 1760.00 Hz) at +0.09s
     const osc2 = ctx.createOscillator();
     const gain2 = ctx.createGain();
     osc2.type = 'sine';
-    osc2.frequency.setValueAtTime(1760.00, now + 0.09); // A6
-    gain2.gain.setValueAtTime(0.4, now + 0.09);
-    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
-
+    osc2.frequency.setValueAtTime(1760.00, now + 0.08);
+    gain2.gain.setValueAtTime(0.5, now + 0.08);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
     osc2.connect(gain2);
     gain2.connect(ctx.destination);
-    osc2.start(now + 0.09);
-    osc2.stop(now + 0.56);
-  } catch (e) {
-    console.warn('Audio chime error:', e);
-  }
+    osc2.start(now + 0.08);
+    osc2.stop(now + 0.51);
+  } catch {}
 }
 
 /**
@@ -84,7 +178,7 @@ export async function registerServiceWorker(onNavigateCallback = null) {
 }
 
 /**
- * Check if Web Notification is supported by device (iOS 16.4+ / Android / Desktop)
+ * Check if Web Notification is supported by device
  */
 export function isNotificationSupported() {
   return typeof window !== 'undefined' && 'Notification' in window;
@@ -94,10 +188,9 @@ export function isNotificationSupported() {
  * Request Notification Permission from User
  */
 export async function requestNotificationPermission() {
+  unlockAudio();
   if (!isNotificationSupported()) return 'unsupported';
   try {
-    // Unlock AudioContext on user click
-    getAudioContext();
     const perm = await Notification.requestPermission();
     localStorage.setItem('metapost_notification_permission', perm);
     return perm;
@@ -124,30 +217,32 @@ export async function triggerNewMessageNotification({
   }
 
   // 2. Trigger System Lock Screen Notification if allowed
-  if (isNotificationSupported() && Notification.permission === 'granted') {
-    const title = `${customerName} • ${pageName}`;
-    const body = messageText || 'Khách hàng vừa gửi tin nhắn mới';
-    const tag = convId ? `chat-${convId}` : 'chat-general';
-
+  if (isNotificationSupported()) {
     try {
-      if ('serviceWorker' in navigator) {
-        const reg = await navigator.serviceWorker.ready;
-        if (reg && reg.showNotification) {
-          await reg.showNotification(title, {
-            body,
-            icon: avatarUrl || "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='25' fill='%232563eb'/><text x='50%' y='65%' font-size='50' font-weight='900' fill='white' text-anchor='middle' font-family='sans-serif'>TA</text></svg>",
-            badge: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%232563eb'/></svg>",
-            data: { pageId, convId, customerName },
-            tag,
-            renotify: true,
-            vibrate: [200, 100, 200]
-          });
-          return;
-        }
-      }
+      if (Notification.permission === 'granted') {
+        const title = `${customerName} • ${pageName}`;
+        const body = messageText || 'Khách hàng vừa gửi tin nhắn mới';
+        const tag = convId ? `chat-${convId}` : 'chat-general';
 
-      // Fallback
-      new Notification(title, { body, tag });
+        if ('serviceWorker' in navigator) {
+          const reg = await navigator.serviceWorker.ready;
+          if (reg && reg.showNotification) {
+            await reg.showNotification(title, {
+              body,
+              icon: avatarUrl || "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='25' fill='%232563eb'/><text x='50%' y='65%' font-size='50' font-weight='900' fill='white' text-anchor='middle' font-family='sans-serif'>TA</text></svg>",
+              badge: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%232563eb'/></svg>",
+              data: { pageId, convId, customerName },
+              tag,
+              renotify: true,
+              vibrate: [200, 100, 200]
+            });
+            return;
+          }
+        }
+
+        // Fallback
+        new Notification(title, { body, tag });
+      }
     } catch (e) {
       console.warn('Trigger notification error:', e);
     }

@@ -733,29 +733,28 @@ function playChimeSound() {
       }
     });
 
-    // Intelligent quiet polling: only poll conversations every 45s for active pages
+    // Fast background polling: check conversations every 15s
     const timer = setInterval(() => {
-      if (!document.hidden && fbToken) {
+      if (fbToken) {
         const cachedPages = JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]');
         if (cachedPages.length > 0) {
           const currentVisible = JSON.parse(localStorage.getItem('metapost_visible_page_ids') || '[]');
           const active = currentVisible.length > 0
             ? cachedPages.filter(p => currentVisible.includes(p.id))
             : cachedPages;
-          loadAllConversations(active);
+          loadAllConversations(active, true);
         }
       }
-    }, 45000);
+    }, 15000);
 
     return () => clearInterval(timer);
   }, []);
 
-  // Real-time Active Conversation Silent Sync (Every 10s)
+  // Real-time Active Conversation Silent Sync (Every 5s)
   useEffect(() => {
     if (!activeConversation?.fb_conversation_id || !fbToken) return;
 
     const activeTimer = setInterval(async () => {
-      if (document.hidden) return;
       try {
         const msgs = await fetchConversationMessages(
           activeConversation.fb_conversation_id,
@@ -783,7 +782,7 @@ function playChimeSound() {
           });
         }
       } catch {}
-    }, 10000);
+    }, 5000);
 
     return () => clearInterval(activeTimer);
   }, [activeConversation?.fb_conversation_id, activeConversation?.page_token, fbToken]);
