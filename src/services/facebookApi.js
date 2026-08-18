@@ -1127,8 +1127,6 @@ export async function updateCampaignBudget(campaignId, dailyBudgetVnd, token) {
   const formData = new URLSearchParams();
   // Facebook API expects budget in cents / smallest currency unit (for VND, 1 VND = 100 hundredths)
   formData.append('daily_budget', Math.round(dailyBudgetVnd * 100));
-  formData.append('access_token', clean);
-
   const res = await fetch(`${API_BASE}/${campaignId}`, {
     method: 'POST',
     body: formData
@@ -1137,4 +1135,90 @@ export async function updateCampaignBudget(campaignId, dailyBudgetVnd, token) {
   if (data.error) throw new Error(data.error.message || 'Lỗi cập nhật ngân sách');
   return data;
 }
+
+/**
+ * Fetch Daily Insights Breakdown for Visual Trend Chart
+ */
+export async function fetchDailyAccountInsights(adAccountId, token, datePreset = 'last_7d') {
+  const clean = cleanFacebookToken(token);
+  if (!clean || !adAccountId) return [];
+  try {
+    const res = await fetch(
+      `${API_BASE}/${adAccountId}/insights?fields=spend,impressions,clicks,cpc,cpm,ctr,actions,cost_per_action_type&time_increment=1&date_preset=${datePreset}&access_token=${clean}`
+    );
+    const data = await res.json();
+    if (data.error) return { error: data.error };
+
+    const rawList = data.data || [];
+    return rawList.map(item => {
+      const spend = parseFloat(item.spend || 0);
+      const { messagingCount, costPerMessage } = extractMessagingStats(
+        item.actions,
+        item.cost_per_action_type,
+        spend
+      );
+      return {
+        date: item.date_start,
+        spend,
+        messagingCount,
+        costPerMessage,
+        impressions: parseInt(item.impressions || 0, 10),
+        clicks: parseInt(item.clicks || 0, 10),
+        ctr: parseFloat(item.ctr || 0)
+      };
+    });
+  } catch (err) {
+    console.error('fetchDailyAccountInsights error:', err);
+    return { error: { message: err.message } };
+  }
+}
+
+/**
+ * Fetch Ads (Creatives & Performance) inside a Campaign
+ */
+export async function fetchCampaignAds(campaignId, token, datePreset = 'today') {
+  const clean = cleanFacebookToken(token);
+  if (!clean || !campaignId) return [];
+  try {
+    const fields = `id,name,status,creative{id,title,body,image_url,thumbnail_url,effective_object_story_id},insights.date_preset(${datePreset}){spend,impressions,clicks,cpc,cpm,ctr,actions,cost_per_action_type}`;
+    const res = await fetch(
+      `${API_BASE}/${campaignId}/ads?fields=${fields}&limit=50&access_token=${clean}`
+    );
+    const data = await res.json();
+    if (data.error) return { error: data.error };
+
+    const rawList = data.data || [];
+    return rawList.map(ad => {
+      const insight = ad.insights?.data?.[0] || null;
+      const spend = insight ? parseFloat(insight.spend || 0) : 0;
+      const { messagingCount, costPerMessage } = extractMessagingStats(
+        insight?.actions,
+        insight?.cost_per_action_type,
+        spend
+      );
+
+      return {
+        id: ad.id,
+        name: ad.name,
+        status: ad.status,
+        creative: {
+          title: ad.creative?.title || '',
+          body: ad.creative?.body || '',
+          imageUrl: ad.creative?.image_url || ad.creative?.thumbnail_url || '',
+          storyId: ad.creative?.effective_object_story_id || null
+        },
+        spend,
+        impressions: insight ? parseInt(insight.impressions || 0, 10) : 0,
+        clicks: insight ? parseInt(insight.clicks || 0, 10) : 0,
+        ctr: insight ? parseFloat(insight.ctr || 0) : 0,
+        messagingCount,
+        costPerMessage
+      };
+    });
+  } catch (err) {
+    console.error('fetchCampaignAds error:', err);
+    return { error: { message: err.message } };
+  }
+}
+
 
