@@ -40,7 +40,12 @@ export default function ConversationSidebar({
   onRefresh,
   isLoading,
   onMarkAllAsRead,
-  onOpenTokenModal
+  onOpenTokenModal,
+  onLoadMore,
+  isLoadingMore,
+  hasMore = true,
+  activeTab,
+  onSwitchTab
 }) {
   const [showFilters, setShowFilters] = useState(false);
   const [pageNicknames, setPageNicknames] = useState(() => {
@@ -109,8 +114,39 @@ export default function ConversationSidebar({
 
   return (
     <aside className="w-full h-full flex flex-col border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
-      {/* Compact Header (48px) — Only Page Selector & Action Icons */}
-      <div className="p-2.5 sm:p-3 border-b border-slate-100 dark:border-slate-800 flex-shrink-0 bg-white dark:bg-slate-900 z-10 space-y-2">
+      {/* Compact Header — Only Page Selector & Action Icons */}
+      <div className="p-2 sm:p-2.5 border-b border-slate-100 dark:border-slate-800 flex-shrink-0 bg-white dark:bg-slate-900 z-10 space-y-1.5">
+        {/* Mobile-Only Top Navigation Strip */}
+        <div className="flex md:hidden items-center justify-between gap-2 pb-1 border-b border-slate-100 dark:border-slate-800">
+          <div className="flex items-center gap-1.5">
+            <span className="font-extrabold text-xs text-brand-600 dark:text-brand-400">TAStore68</span>
+            <span className="px-1.5 py-0.2 rounded bg-brand-50 dark:bg-brand-950 text-[10px] font-black text-brand-600 border border-brand-200/50">PRO</span>
+          </div>
+
+          <div className="flex items-center gap-1">
+            {onSwitchTab && (
+              <button
+                type="button"
+                onClick={() => onSwitchTab('post')}
+                className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-200 flex items-center gap-1"
+                title="Chuyển sang Đăng Bài Đa Page"
+              >
+                <span>📝 Đăng bài</span>
+              </button>
+            )}
+            {onOpenTokenModal && (
+              <button
+                type="button"
+                onClick={onOpenTokenModal}
+                className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-amber-500 hover:bg-slate-200"
+                title="Quản lý Token"
+              >
+                <Key className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+
         <div className="flex items-center justify-between gap-1.5">
           {/* Page Dropdown */}
           <div className="relative flex-1 min-w-0">
@@ -373,6 +409,29 @@ export default function ConversationSidebar({
               </div>
             );
           })
+        )}
+
+        {/* Load More Button */}
+        {conversations.length >= 20 && hasMore && onLoadMore && (
+          <div className="p-3 text-center">
+            <button
+              type="button"
+              onClick={onLoadMore}
+              disabled={isLoadingMore}
+              className="w-full py-2 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700/80 transition-smooth flex items-center justify-center gap-2 shadow-xs cursor-pointer active:scale-98 disabled:opacity-50"
+            >
+              {isLoadingMore ? (
+                <>
+                  <span className="w-3.5 h-3.5 border-2 border-brand-500 border-t-transparent rounded-full animate-spin"></span>
+                  <span>Đang tải tin nhắn cũ hơn...</span>
+                </>
+              ) : (
+                <>
+                  <span>📥 Tải thêm 50 hội thoại cũ hơn</span>
+                </>
+              )}
+            </button>
+          </div>
         )}
       </div>
 

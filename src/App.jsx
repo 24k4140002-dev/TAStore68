@@ -9,7 +9,9 @@ import {
   Sparkles,
   Layers,
   CheckCircle2,
-  Database
+  Database,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 import CRMInbox from './components/inbox/CRMInbox';
 import { cleanFacebookToken } from './services/facebookApi';
@@ -22,6 +24,13 @@ export default function App() {
   const [fbToken, setFbToken] = useState(() => cleanFacebookToken(localStorage.getItem('metapost_fb_token') || ''));
   const [theme, setTheme] = useState(() => localStorage.getItem('metapost_theme') || 'light');
   const [isTokenModalOpen, setIsTokenModalOpen] = useState(false);
+  const [isFocusMode, setIsFocusMode] = useState(() => localStorage.getItem('metapost_focus_mode') === 'true');
+
+  const toggleFocusMode = () => {
+    const next = !isFocusMode;
+    setIsFocusMode(next);
+    localStorage.setItem('metapost_focus_mode', String(next));
+  };
 
   // Sync theme
   useEffect(() => {
@@ -83,8 +92,8 @@ export default function App() {
 
   return (
     <div className="h-full h-[100dvh] w-full flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden font-sans fixed inset-0">
-      {/* Top Main Navigation Header */}
-      <header className="h-[60px] flex-shrink-0 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 px-3 sm:px-4 lg:px-6 flex items-center justify-between z-30">
+      {/* Top Main Navigation Header (Auto-hidden on Mobile, Collapsible on Desktop via Focus Mode) */}
+      <header className={`${isFocusMode ? 'hidden' : 'hidden md:flex'} h-[56px] flex-shrink-0 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 px-3 sm:px-4 lg:px-6 items-center justify-between z-30`}>
         {/* Left: Brand Logo & Version */}
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-2.5">
@@ -132,9 +141,9 @@ export default function App() {
         </div>
 
         {/* Right Controls */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2">
           {/* Online status indicator */}
-          <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60 text-[11px] font-bold">
+          <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60 text-[11px] font-bold">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
             <span>Đang có mặt</span>
           </div>
@@ -153,6 +162,15 @@ export default function App() {
             <span className="hidden sm:inline">{fbToken ? 'Token Đã Kết Nối' : 'Nhập Token FB'}</span>
           </button>
 
+          {/* Focus Mode Toggle */}
+          <button
+            onClick={toggleFocusMode}
+            className="p-2 rounded-xl text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth"
+            title="Chế độ tập trung (Thu gọn menu)"
+          >
+            <Maximize2 className="w-4 h-4" />
+          </button>
+
           {/* Theme Toggle */}
           <button
             onClick={toggleTheme}
@@ -163,6 +181,18 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {/* Floating Focus Mode Expand Button (When header is collapsed on Desktop) */}
+      {isFocusMode && (
+        <button
+          onClick={toggleFocusMode}
+          className="fixed top-3 right-3 z-50 px-3 py-1.5 rounded-xl bg-white/90 dark:bg-slate-900/90 backdrop-blur border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-brand-500 shadow-md transition-smooth hidden md:flex items-center gap-1.5 text-xs font-bold cursor-pointer animate-in fade-in"
+          title="Hiện lại thanh menu"
+        >
+          <Minimize2 className="w-3.5 h-3.5" />
+          <span>Hiện Menu</span>
+        </button>
+      )}
 
       {/* Main View Area */}
       <Suspense fallback={
@@ -175,11 +205,15 @@ export default function App() {
           <CRMInbox
             fbToken={fbToken}
             onOpenTokenModal={() => setIsTokenModalOpen(true)}
+            activeTab={activeTab}
+            onSwitchTab={setActiveTab}
           />
         ) : (
           <PostStudio
             fbToken={fbToken}
             onOpenTokenModal={() => setIsTokenModalOpen(true)}
+            activeTab={activeTab}
+            onSwitchTab={setActiveTab}
           />
         )}
 

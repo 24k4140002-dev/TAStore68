@@ -304,13 +304,15 @@ export async function fetchPages(fbToken) {
   return enriched;
 }
 
-// Fetch conversations for a specific page with participant avatars & snippet
-export async function fetchPageConversations(pageId, pageName, pageToken) {
+// Fetch conversations for a specific page with participant avatars & snippet (supports pagination)
+export async function fetchPageConversations(pageId, pageName, pageToken, afterCursor = null) {
   if (!pageId || !pageToken) return [];
   try {
-    const res = await safeFetch(
-      `${API_BASE}/${pageId}/conversations?fields=id,updated_time,unread_count,participants{id,name,picture{data{url}}},can_reply,messages.limit(1){id,message,created_time,from,attachments{mime_type,file_url,image_data}}&limit=50&access_token=${encodeURIComponent(pageToken)}`
-    );
+    let url = `${API_BASE}/${pageId}/conversations?fields=id,updated_time,unread_count,participants{id,name,picture{data{url}}},can_reply,messages.limit(1){id,message,created_time,from,attachments{mime_type,file_url,image_data}}&limit=50&access_token=${encodeURIComponent(pageToken)}`;
+    if (afterCursor) {
+      url += `&after=${encodeURIComponent(afterCursor)}`;
+    }
+    const res = await safeFetch(url);
 
     if (!res.data) return [];
 
@@ -375,6 +377,10 @@ export async function fetchPageConversations(pageId, pageName, pageToken) {
           : null
       };
     });
+
+    conversations.nextCursor = res.paging?.cursors?.after || null;
+    conversations.hasMore = !!(res.paging?.next || res.paging?.cursors?.after);
+    return conversations;
   } catch (err) {
     console.warn(`Fetch conversations failed for ${pageName}:`, err.message);
     return [];

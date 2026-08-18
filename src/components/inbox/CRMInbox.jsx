@@ -52,7 +52,7 @@ function saveReadMap(map) {
   localStorage.setItem('metapost_read_map', JSON.stringify(map));
 }
 
-export default function CRMInbox({ fbToken, onOpenTokenModal }) {
+export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitchTab }) {
   const [pages, setPages] = useState(() => JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]'));
   const [visiblePageIds, setVisiblePageIds] = useState(() => {
     try {
@@ -149,6 +149,10 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
     return [];
   }, [fbToken]);
 
+  const [pageCursors, setPageCursors] = useState({});
+  const [hasMoreOlder, setHasMoreOlder] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+
   // 3. Fetch All Conversations in Parallel (Throttled to avoid Rate Limit #4)
   const loadAllConversations = useCallback(async (currentPages = pages) => {
     if (!fbToken || currentPages.length === 0) return;
@@ -169,11 +173,21 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
       );
 
       const combined = [];
+      const newCursors = {};
+      let anyHasMore = false;
+
       results.forEach(res => {
         if (res.status === 'fulfilled' && Array.isArray(res.value)) {
           combined.push(...res.value);
+          if (res.value.length > 0 && res.value[0]?.page_id) {
+            newCursors[res.value[0].page_id] = res.value.nextCursor || null;
+            if (res.value.hasMore) anyHasMore = true;
+          }
         }
       });
+
+      setPageCursors(newCursors);
+      setHasMoreOlder(anyHasMore);
 
       // Apply read tracking and persistent labels
       const currentReadMap = getReadMap();
@@ -219,6 +233,57 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
       setIsLoadingConversations(false);
     }
   }, [fbToken, pages, selectedPageId, activeConversation]);
+
+  // Load More / Older Conversations
+  const handleLoadMoreConversations = async () => {
+    if (isLoadingMore || !fbToken) return;
+    setIsLoadingMore(true);
+
+    try {
+      const storedPageId = localStorage.getItem('metapost_selected_page_id') || selectedPageId;
+      const targetPages = storedPageId === 'all'
+        ? (activePages.length > 0 ? activePages : pages)
+        : (activePages.length > 0 ? activePages : pages).filter(p => p.id === storedPageId);
+
+      const nextResults = await runInChunks(
+        targetPages,
+        page => fetchPageConversations(page.id, page.name, page.access_token || fbToken, pageCursors[page.id]),
+        2,
+        200
+      );
+
+      const olderConvs = [];
+      const updatedCursors = { ...pageCursors };
+      let anyHasMore = false;
+
+      nextResults.forEach(res => {
+        if (res.status === 'fulfilled' && Array.isArray(res.value)) {
+          olderConvs.push(...res.value);
+          if (res.value.length > 0 && res.value[0]?.page_id) {
+            updatedCursors[res.value[0].page_id] = res.value.nextCursor || null;
+            if (res.value.hasMore) anyHasMore = true;
+          }
+        }
+      });
+
+      setPageCursors(updatedCursors);
+      setHasMoreOlder(anyHasMore);
+
+      if (olderConvs.length > 0) {
+        setConversations(prev => {
+          const existingIds = new Set(prev.map(c => c.fb_conversation_id));
+          const freshOlder = olderConvs.filter(c => !existingIds.has(c.fb_conversation_id));
+          const merged = [...prev, ...freshOlder];
+          localStorage.setItem('metapost_inbox_cache', JSON.stringify(merged));
+          return merged;
+        });
+      }
+    } catch (err) {
+      console.warn('Load more conversations error:', err);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
 
   // 4. Select Conversation & Load Messages
 // Helper: Gentle audio chime on new message from customer
@@ -683,6 +748,11 @@ function playChimeSound() {
           isLoading={isLoadingConversations}
           onMarkAllAsRead={handleMarkAllAsRead}
           onOpenTokenModal={onOpenTokenModal}
+          onLoadMore={handleLoadMoreConversations}
+          isLoadingMore={isLoadingMore}
+          hasMore={hasMoreOlder}
+          activeTab={activeTab}
+          onSwitchTab={onSwitchTab}
         />
       </div>
 
