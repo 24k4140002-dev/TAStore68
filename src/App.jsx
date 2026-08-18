@@ -37,9 +37,11 @@ export default function App() {
   const [isTokenModalOpen, setIsTokenModalOpen] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(() => localStorage.getItem('metapost_focus_mode') === 'true');
   const [notifPermission, setNotifPermission] = useState(() => {
-    if (typeof window !== 'undefined' && 'Notification' in window) {
-      return Notification.permission;
-    }
+    try {
+      if (typeof window !== 'undefined' && 'Notification' in window && typeof Notification.permission === 'string') {
+        return Notification.permission;
+      }
+    } catch {}
     return 'default';
   });
 

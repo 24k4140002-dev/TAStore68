@@ -118,6 +118,7 @@ export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitc
   const [isQuickRepliesOpen, setIsQuickRepliesOpen] = useState(false);
   const [isVietQROpen, setIsVietQROpen] = useState(false);
   const [isAutoRulesOpen, setIsAutoRulesOpen] = useState(false);
+  const [isPageManagerOpen, setIsPageManagerOpen] = useState(false);
   const knownMessagesMapRef = useRef({});
 
   // 1. Load Meta & Page Labels (from localStorage & defaults)
