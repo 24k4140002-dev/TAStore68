@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, memo } from 'react';
 import {
   Search,
   MessageSquare,
@@ -16,6 +16,81 @@ import {
 } from 'lucide-react';
 import { getInitials, getAvatarColor, formatTimeAgo, getPageDisplayName } from '../../services/facebookApi';
 import CustomerAvatar from '../common/CustomerAvatar';
+
+// ⚡ Memoized Conversation Card for 60/120fps smooth scrolling
+const ConversationCard = memo(function ConversationCard({
+  conv,
+  isActive,
+  isAllPages,
+  pageDisplayName,
+  onSelect
+}) {
+  const isUnread = conv.unread_count > 0;
+  const isStarred = conv.is_starred || conv.status === 'starred';
+
+  return (
+    <div
+      onClick={onSelect}
+      className={`group flex items-start gap-3.5 p-3.5 cursor-pointer transition-smooth relative gpu-layer conversation-card-layer ${
+        isActive
+          ? 'bg-blue-50/90 dark:bg-blue-950/50 border-l-4 border-l-brand-500'
+          : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+      }`}
+    >
+      {/* Avatar with fallback */}
+      <div className="relative flex-shrink-0">
+        <CustomerAvatar
+          url={conv.avatar_url}
+          name={conv.customer_name}
+          size="w-12 h-12"
+          textClass="text-sm font-bold"
+        />
+
+        <span
+          className={`absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center text-[10px] text-white border-2 border-white dark:border-slate-900 ${
+            conv.conversation_type === 'messenger' ? 'bg-blue-600' : 'bg-emerald-600'
+          }`}
+        >
+          {conv.conversation_type === 'messenger' ? '⚡' : '💬'}
+        </span>
+      </div>
+
+      {/* Body info (Clear 15px font) */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-baseline justify-between gap-1 mb-1">
+          <h4 className={`text-[15px] truncate flex items-center gap-1.5 ${isUnread ? 'font-bold text-slate-900 dark:text-white' : 'font-semibold text-slate-700 dark:text-slate-200'}`}>
+            {conv.customer_name}
+            {isStarred && <Star className="w-4 h-4 fill-amber-400 text-amber-400 flex-shrink-0" />}
+          </h4>
+          <span className="text-xs text-slate-400 font-medium flex-shrink-0">
+            {formatTimeAgo(conv.last_message_at)}
+          </span>
+        </div>
+
+        <p className={`text-[13.5px] truncate leading-normal ${isUnread ? 'font-semibold text-slate-900 dark:text-slate-100' : 'font-normal text-slate-500 dark:text-slate-400'}`}>
+          {conv.snippet || '...'}
+        </p>
+
+        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+          {isAllPages && (
+            <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-[11.5px] font-semibold text-slate-600 dark:text-slate-300 truncate max-w-[150px] border border-slate-200/60 dark:border-slate-700/60">
+              {pageDisplayName || conv.page_name}
+            </span>
+          )}
+          {(conv.labels || []).slice(0, 3).map((l, idx) => (
+            <span
+              key={idx}
+              className="px-2.5 py-0.5 rounded-md text-[11.5px] font-bold text-white shadow-xs truncate max-w-[120px]"
+              style={{ background: l.color || '#10b981' }}
+            >
+              {l.emoji || '🏷️'} {l.name}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+});
 
 export default function ConversationSidebar({
   pages,
@@ -87,28 +162,30 @@ export default function ConversationSidebar({
     onSelectLabel(null);
   };
 
-  const filteredConversations = conversations.filter(conv => {
-    if (selectedPageId !== 'all' && conv.page_id !== selectedPageId) return false;
-    if (channelFilter !== 'all' && conv.conversation_type !== channelFilter) return false;
+  const filteredConversations = useMemo(() => {
+    return conversations.filter(conv => {
+      if (selectedPageId !== 'all' && conv.page_id !== selectedPageId) return false;
+      if (channelFilter !== 'all' && conv.conversation_type !== channelFilter) return false;
 
-    if (statusFilter === 'unread' && conv.unread_count === 0) return false;
-    if (statusFilter === 'starred' && !conv.is_starred && conv.status !== 'starred') return false;
-    if (statusFilter === 'done' && conv.status !== 'done' && conv.status !== 'closed') return false;
-    if (statusFilter === 'archived' && conv.status !== 'archived') return false;
-    if (statusFilter === 'spam' && conv.status !== 'spam') return false;
-    if (statusFilter === 'open' && (conv.status === 'done' || conv.status === 'closed' || conv.status === 'archived' || conv.status === 'spam')) return false;
+      if (statusFilter === 'unread' && conv.unread_count === 0) return false;
+      if (statusFilter === 'starred' && !conv.is_starred && conv.status !== 'starred') return false;
+      if (statusFilter === 'done' && conv.status !== 'done' && conv.status !== 'closed') return false;
+      if (statusFilter === 'archived' && conv.status !== 'archived') return false;
+      if (statusFilter === 'spam' && conv.status !== 'spam') return false;
+      if (statusFilter === 'open' && (conv.status === 'done' || conv.status === 'closed' || conv.status === 'archived' || conv.status === 'spam')) return false;
 
-    if (selectedLabelId && !conv.labels?.some(l => l.id === selectedLabelId)) return false;
+      if (selectedLabelId && !conv.labels?.some(l => l.id === selectedLabelId)) return false;
 
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchName = conv.customer_name?.toLowerCase().includes(q);
-      const matchSnippet = conv.snippet?.toLowerCase().includes(q);
-      if (!matchName && !matchSnippet) return false;
-    }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchName = conv.customer_name?.toLowerCase().includes(q);
+        const matchSnippet = conv.snippet?.toLowerCase().includes(q);
+        if (!matchName && !matchSnippet) return false;
+      }
 
-    return true;
-  });
+      return true;
+    });
+  }, [conversations, selectedPageId, channelFilter, statusFilter, selectedLabelId, searchQuery]);
 
   const unreadTotal = conversations.filter(c => c.unread_count > 0).length;
 
@@ -338,77 +415,16 @@ export default function ConversationSidebar({
             <p className="text-xs text-slate-400 mt-0.5">Thử chọn thư mục khác hoặc đổi từ khóa tìm kiếm</p>
           </div>
         ) : (
-          filteredConversations.map(conv => {
-            const isActive = activeConversation?.fb_conversation_id === conv.fb_conversation_id;
-            const isUnread = conv.unread_count > 0;
-            const isStarred = conv.is_starred || conv.status === 'starred';
-            const initials = getInitials(conv.customer_name);
-            const bgColor = getAvatarColor(conv.customer_name);
-
-            return (
-              <div
-                key={conv.fb_conversation_id}
-                onClick={() => onSelectConversation(conv)}
-                className={`group flex items-start gap-3.5 p-3.5 cursor-pointer transition-smooth relative ${
-                  isActive
-                    ? 'bg-blue-50/90 dark:bg-blue-950/50 border-l-4 border-l-brand-500'
-                    : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
-                }`}
-              >
-                {/* Avatar with fallback */}
-                <div className="relative flex-shrink-0">
-                  <CustomerAvatar
-                    url={conv.avatar_url}
-                    name={conv.customer_name}
-                    size="w-12 h-12"
-                    textClass="text-sm font-bold"
-                  />
-
-                  <span
-                    className={`absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center text-[10px] text-white border-2 border-white dark:border-slate-900 ${
-                      conv.conversation_type === 'messenger' ? 'bg-blue-600' : 'bg-emerald-600'
-                    }`}
-                  >
-                    {conv.conversation_type === 'messenger' ? '⚡' : '💬'}
-                  </span>
-                </div>
-
-                {/* Body info (Clear 15px font) */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-baseline justify-between gap-1 mb-1">
-                    <h4 className={`text-[15px] truncate flex items-center gap-1.5 ${isUnread ? 'font-bold text-slate-900 dark:text-white' : 'font-semibold text-slate-700 dark:text-slate-200'}`}>
-                      {conv.customer_name}
-                      {isStarred && <Star className="w-4 h-4 fill-amber-400 text-amber-400 flex-shrink-0" />}
-                    </h4>
-                    <span className="text-xs text-slate-400 font-medium flex-shrink-0">
-                      {formatTimeAgo(conv.last_message_at)}
-                    </span>
-                  </div>
-
-                  <p className={`text-[13.5px] truncate leading-normal ${isUnread ? 'font-semibold text-slate-900 dark:text-slate-100' : 'font-normal text-slate-500 dark:text-slate-400'}`}>
-                    {conv.snippet || '...'}
-                  </p>
-
-                  <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                    {selectedPageId === 'all' && (
-                      <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-[11.5px] font-semibold text-slate-600 dark:text-slate-300 truncate max-w-[150px] border border-slate-200/60 dark:border-slate-700/60">
-                        {getPageDisplayName(conv.page_id, pages, pageNicknames) || conv.page_name}
-                      </span>
-                    )}
-                    {(conv.labels || []).slice(0, 3).map((l, idx) => (
-                      <span
-                        key={idx}
-                        className="px-2.5 py-0.5 rounded-md text-[11.5px] font-bold text-white shadow-xs truncate max-w-[120px]"
-                        style={{ background: l.color || '#10b981' }}
-                      >
-                        {l.emoji || '🏷️'} {l.name}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            );
-          })
+          filteredConversations.map(conv => (
+            <ConversationCard
+              key={conv.fb_conversation_id}
+              conv={conv}
+              isActive={activeConversation?.fb_conversation_id === conv.fb_conversation_id}
+              isAllPages={selectedPageId === 'all'}
+              pageDisplayName={getPageDisplayName(conv.page_id, pages, pageNicknames) || conv.page_name}
+              onSelect={() => onSelectConversation(conv)}
+            />
+          ))
         )}
 
         {/* Load More Button */}

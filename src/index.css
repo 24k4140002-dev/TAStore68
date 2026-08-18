@@ -85,9 +85,23 @@
   background: rgba(100, 116, 139, 0.8);
 }
 
-/* Smooth transitions */
+/* Optimized transitions (GPU-friendly, no layout thrashing) */
 .transition-smooth {
-  transition: all 0.15s ease-out;
+  transition-property: color, background-color, border-color, opacity, transform;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 120ms;
+}
+
+/* GPU Hardware compositing for butter-smooth 60/120fps scrolling */
+.gpu-layer {
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.conversation-card-layer {
+  contain: layout style paint;
 }
 
 /* Chat bubbles */
