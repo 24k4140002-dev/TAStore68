@@ -443,11 +443,36 @@ export default function ChatThread({
                       )
                     )}
 
+                    {/* Standalone Sticker (If present without attachments) */}
+                    {msg.sticker && (!msg.attachments?.data || msg.attachments.data.length === 0) && (
+                      <div className="py-1">
+                        <img
+                          src={msg.sticker}
+                          alt="Sticker"
+                          className="w-20 h-20 sm:w-24 sm:h-24 object-contain select-none"
+                        />
+                      </div>
+                    )}
+
                     {/* Attachments (Photos, Voice Audio, Videos, Documents) */}
                     {msg.attachments?.data?.map((att, aIdx) => {
+                      const isStickerAtt = msg.is_sticker || att.is_sticker || att.name?.includes('sticker') || att.file_url?.includes('sticker');
                       const isImg = att.image_data || att.mime_type?.startsWith('image/') || att.file_url?.match(/\.(jpeg|jpg|png|webp|gif)/i);
                       const isAudio = att.mime_type?.startsWith('audio/') || att.file_url?.match(/\.(mp3|m4a|aac|wav|ogg)/i);
                       const isVideo = att.mime_type?.startsWith('video/') || att.video_data || att.file_url?.match(/\.(mp4|mov|webm)/i);
+
+                      if (isStickerAtt) {
+                        const imgSource = att.image_data?.url || att.file_url || msg.sticker;
+                        return (
+                          <div key={aIdx} className="py-1">
+                            <img
+                              src={imgSource}
+                              alt="Sticker"
+                              className="w-20 h-20 sm:w-24 sm:h-24 object-contain select-none"
+                            />
+                          </div>
+                        );
+                      }
 
                       if (isImg) {
                         const imgSource = att.image_data?.url || att.file_url;
