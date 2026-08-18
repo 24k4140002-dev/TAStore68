@@ -121,8 +121,6 @@ export default function ChatThread({
 
   const isDone = conversation.status === 'done' || conversation.status === 'closed';
   const isStarred = conversation.is_starred || conversation.status === 'starred';
-  const initials = getInitials(conversation.customer_name);
-  const bgColor = getAvatarColor(conversation.customer_name);
 
   const handleTextChange = (e) => {
     const val = e.target.value;

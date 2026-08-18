@@ -20,6 +20,7 @@ import {
   Grid
 } from 'lucide-react';
 import { getInitials, getAvatarColor, formatDateTime, isSticker } from '../../services/facebookApi';
+import CustomerAvatar from '../common/CustomerAvatar';
 
 const SUGGESTED_LABELS = [
   { name: 'Khách hàng mới', color: '#06b6d4', emoji: '✨' },
@@ -96,25 +97,12 @@ export default function CustomerProfilePanel({
       {/* 1. Profile Header */}
       <div className="p-4 space-y-3">
         <div className="flex items-center gap-3">
-          <div className="w-13 h-13 rounded-full overflow-hidden border border-slate-200 dark:border-slate-700 flex items-center justify-center text-white font-bold text-base flex-shrink-0 shadow-xs">
-            {conversation.avatar_url ? (
-              <img
-                src={conversation.avatar_url}
-                alt={conversation.customer_name}
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  e.target.style.display = 'none';
-                  e.target.nextSibling.style.display = 'flex';
-                }}
-              />
-            ) : null}
-            <div
-              className={`w-full h-full flex items-center justify-center ${conversation.avatar_url ? 'hidden' : 'flex'}`}
-              style={{ background: bgColor }}
-            >
-              {initials}
-            </div>
-          </div>
+          <CustomerAvatar
+            url={conversation.avatar_url}
+            name={conversation.customer_name}
+            size="w-13 h-13"
+            textClass="text-base font-bold"
+          />
 
           <div className="min-w-0 flex-1">
             <h3 className="font-extrabold text-base sm:text-lg text-slate-900 dark:text-white truncate">
