@@ -124,18 +124,27 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
     }
   };
 
-  // 2. Fetch Facebook Pages
-  const loadPages = useCallback(async () => {
+  // 2. Fetch Facebook Pages (Cache-first: always read from localStorage immediately, never call /me/accounts on mount)
+  const loadPages = useCallback(async (forceRefresh = false) => {
     if (!fbToken) return [];
     try {
+      const cached = JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]');
+      if (!forceRefresh && cached && cached.length > 0) {
+        setPages(cached);
+        return cached;
+      }
       const fetchedPages = await fetchPages(fbToken);
       if (fetchedPages.length > 0) {
         setPages(fetchedPages);
         localStorage.setItem('metapost_pages_cache', JSON.stringify(fetchedPages));
         return fetchedPages;
       }
-    } catch (err) {
-      console.warn('Load pages error:', err.message);
+    } catch {
+      const cached = JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]');
+      if (cached && cached.length > 0) {
+        setPages(cached);
+        return cached;
+      }
     }
     return [];
   }, [fbToken]);
@@ -618,19 +627,29 @@ function playChimeSound() {
   // Initial Boot
   useEffect(() => {
     loadLabelsAndTags();
-    loadPages().then(fetched => {
-      loadAllConversations(fetched);
-      // Scan unread across ALL pages on initial load
-      scanAllUnread(fetched);
+    loadPages(false).then(loadedPages => {
+      const pagesToUse = loadedPages && loadedPages.length > 0 ? loadedPages : pages;
+      if (pagesToUse && pagesToUse.length > 0) {
+        const active = visiblePageIds.length > 0
+          ? pagesToUse.filter(p => visiblePageIds.includes(p.id))
+          : pagesToUse;
+        loadAllConversations(active);
+      }
     });
 
+    // Intelligent quiet polling: only poll conversations every 45s for active pages
     const timer = setInterval(() => {
-      if (!document.hidden) {
-        loadAllConversations();
-        // Refresh unread summary every 60s
-        if (pages.length > 0) scanAllUnread(pages);
+      if (!document.hidden && fbToken) {
+        const cachedPages = JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]');
+        if (cachedPages.length > 0) {
+          const currentVisible = JSON.parse(localStorage.getItem('metapost_visible_page_ids') || '[]');
+          const active = currentVisible.length > 0
+            ? cachedPages.filter(p => currentVisible.includes(p.id))
+            : cachedPages;
+          loadAllConversations(active);
+        }
       }
-    }, 30000);
+    }, 45000);
 
     return () => clearInterval(timer);
   }, []);
