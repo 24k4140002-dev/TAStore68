@@ -12,10 +12,19 @@ import {
   Database,
   Maximize2,
   Minimize2,
-  TrendingUp
+  TrendingUp,
+  Bell,
+  BellRing,
+  Volume2
 } from 'lucide-react';
 import CRMInbox from './components/inbox/CRMInbox';
 import { cleanFacebookToken } from './services/facebookApi';
+import {
+  registerServiceWorker,
+  requestNotificationPermission,
+  playNotificationChime,
+  isNotificationSupported
+} from './services/notificationService';
 
 const PostStudio = lazy(() => import('./components/post/PostStudio'));
 const AdsStudio = lazy(() => import('./components/ads/AdsStudio'));
@@ -27,6 +36,44 @@ export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem('metapost_theme') || 'light');
   const [isTokenModalOpen, setIsTokenModalOpen] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(() => localStorage.getItem('metapost_focus_mode') === 'true');
+  const [notifPermission, setNotifPermission] = useState(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      return Notification.permission;
+    }
+    return 'default';
+  });
+
+  // 1. Register Service Worker for Web Push & Lock Screen Notifications
+  useEffect(() => {
+    registerServiceWorker((pageId, convId) => {
+      setActiveTab('inbox');
+      if (pageId && pageId !== 'all') localStorage.setItem('metapost_selected_page_id', pageId);
+      if (convId) localStorage.setItem('metapost_active_conv_id', convId);
+    });
+
+    // Handle initial launch from Lock Screen Notification Click URL query params
+    const params = new URLSearchParams(window.location.search);
+    const pId = params.get('pageId');
+    const cId = params.get('convId');
+    if (pId || cId) {
+      setActiveTab('inbox');
+      if (pId && pId !== 'all') localStorage.setItem('metapost_selected_page_id', pId);
+      if (cId) localStorage.setItem('metapost_active_conv_id', cId);
+      // Clean query string from browser bar
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  const handleToggleNotification = async () => {
+    playNotificationChime();
+    const perm = await requestNotificationPermission();
+    setNotifPermission(perm);
+    if (perm === 'granted') {
+      alert('🔔 Đã bật thông báo màn hình khóa & chuông Ting Ting thành công!');
+    } else if (perm === 'denied') {
+      alert('⚠️ Bạn đã chặn thông báo trong cài đặt trình duyệt. Hãy vào Cài đặt Safari/Chrome để bật lại.');
+    }
+  };
 
   const toggleFocusMode = () => {
     const next = !isFocusMode;
@@ -160,6 +207,24 @@ export default function App() {
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
             <span>Đang có mặt</span>
           </div>
+
+          {/* Notification & Sound Toggle button */}
+          <button
+            onClick={handleToggleNotification}
+            className={`p-1.5 sm:px-3 sm:py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition-smooth ${
+              notifPermission === 'granted'
+                ? 'bg-blue-50 dark:bg-blue-950/60 border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-100'
+                : 'bg-slate-50 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+            title="Bật chuông & Thông báo tin nhắn màn hình khóa"
+          >
+            {notifPermission === 'granted' ? (
+              <BellRing className="w-3.5 h-3.5 text-blue-500" />
+            ) : (
+              <Bell className="w-3.5 h-3.5" />
+            )}
+            <span className="hidden lg:inline">{notifPermission === 'granted' ? 'Chuông Bật' : 'Bật Chuông'}</span>
+          </button>
 
           {/* Token Config button */}
           <button

@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import ConversationSidebar from './ConversationSidebar';
 import ChatThread from './ChatThread';
 import CustomerProfilePanel from './CustomerProfilePanel';
 import UnreadBanner from './UnreadBanner';
+import { triggerNewMessageNotification } from '../../services/notificationService';
 
 const SharedMediaModal = lazy(() => import('./SharedMediaModal'));
 const OrderCreateModal = lazy(() => import('./OrderCreateModal'));
@@ -117,7 +118,7 @@ export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitc
   const [isQuickRepliesOpen, setIsQuickRepliesOpen] = useState(false);
   const [isVietQROpen, setIsVietQROpen] = useState(false);
   const [isAutoRulesOpen, setIsAutoRulesOpen] = useState(false);
-  const [isPageManagerOpen, setIsPageManagerOpen] = useState(false);
+  const knownMessagesMapRef = useRef({});
 
   // 1. Load Meta & Page Labels (from localStorage & defaults)
   const loadLabelsAndTags = () => {
@@ -199,7 +200,7 @@ export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitc
       setPageCursors(newCursors);
       setHasMoreOlder(anyHasMore);
 
-      // Apply read tracking and persistent labels
+      // Apply read tracking, new message notification, and persistent labels
       const currentReadMap = getReadMap();
       combined.forEach(c => {
         // Read tracking
@@ -209,6 +210,21 @@ export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitc
             c.unread_count = 0;
           }
         }
+
+        // New Message Audio & Lock Screen Notification Trigger
+        const prevSnippet = knownMessagesMapRef.current[c.fb_conversation_id];
+        if (prevSnippet !== undefined && prevSnippet !== c.snippet && c.unread_count > 0) {
+          triggerNewMessageNotification({
+            pageId: c.page_id,
+            pageName: c.page_name,
+            convId: c.fb_conversation_id,
+            customerName: c.customer_name,
+            messageText: c.snippet,
+            avatarUrl: c.avatar_url,
+            playSound: true
+          });
+        }
+        knownMessagesMapRef.current[c.fb_conversation_id] = c.snippet;
 
         // Persistent Customer Labels from localStorage
         const savedLabels = JSON.parse(
@@ -732,6 +748,44 @@ function playChimeSound() {
 
     return () => clearInterval(timer);
   }, []);
+
+  // Real-time Active Conversation Silent Sync (Every 10s)
+  useEffect(() => {
+    if (!activeConversation?.fb_conversation_id || !fbToken) return;
+
+    const activeTimer = setInterval(async () => {
+      if (document.hidden) return;
+      try {
+        const msgs = await fetchConversationMessages(
+          activeConversation.fb_conversation_id,
+          activeConversation.page_token || fbToken
+        );
+        if (Array.isArray(msgs) && msgs.length > 0) {
+          setMessages(prev => {
+            if (msgs.length > prev.length) {
+              const lastMsg = msgs[msgs.length - 1];
+              if (lastMsg.from?.id !== activeConversation.page_id) {
+                triggerNewMessageNotification({
+                  pageId: activeConversation.page_id,
+                  pageName: activeConversation.page_name,
+                  convId: activeConversation.fb_conversation_id,
+                  customerName: activeConversation.customer_name,
+                  messageText: lastMsg.message,
+                  avatarUrl: activeConversation.avatar_url,
+                  playSound: true
+                });
+              }
+              localStorage.setItem(`metapost_msgs_${activeConversation.fb_conversation_id}`, JSON.stringify(msgs));
+              return msgs;
+            }
+            return prev;
+          });
+        }
+      } catch {}
+    }, 10000);
+
+    return () => clearInterval(activeTimer);
+  }, [activeConversation?.fb_conversation_id, activeConversation?.page_token, fbToken]);
 
   return (
     <div className="flex-1 flex overflow-hidden h-full h-[calc(100dvh-60px)] relative">
