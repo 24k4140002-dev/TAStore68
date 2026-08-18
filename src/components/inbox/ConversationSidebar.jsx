@@ -224,19 +224,18 @@ export default function ConversationSidebar({
           </div>
 
           <div className="flex items-center gap-1">
-            {/* Mobile Notification Bell */}
+            {/* Clean Mobile Bell Icon */}
             <button
               type="button"
               onClick={handleToggleSoundAndNotification}
-              className={`px-2 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 border transition-smooth ${
+              className={`p-1.5 rounded-lg border transition-smooth ${
                 notifGranted
                   ? 'bg-blue-50 dark:bg-blue-950/60 border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400'
-                  : 'bg-amber-500 text-white border-amber-600 animate-pulse'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700'
               }`}
-              title="Bật chuông & Thông báo màn hình khóa"
+              title={notifGranted ? 'Chuông & Thông báo đang bật' : 'Bật chuông & thông báo'}
             >
-              {notifGranted ? <BellRing className="w-3.5 h-3.5 text-blue-500" /> : <Bell className="w-3.5 h-3.5 text-white" />}
-              <span>{notifGranted ? 'Chuông Bật' : 'Bật Chuông'}</span>
+              {notifGranted ? <BellRing className="w-3.5 h-3.5 text-blue-500" /> : <Bell className="w-3.5 h-3.5 text-slate-500" />}
             </button>
 
             {onSwitchTab && (
@@ -301,19 +300,6 @@ export default function ConversationSidebar({
             </button>
           )}
 
-          {/* Bell Sound & Notification Button */}
-          <button
-            onClick={handleToggleSoundAndNotification}
-            className={`p-2 rounded-xl border transition-smooth flex-shrink-0 ${
-              notifGranted
-                ? 'bg-blue-50 dark:bg-blue-950/60 border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400'
-                : 'bg-amber-500 text-white border-amber-600 animate-pulse'
-            }`}
-            title="Bật chuông & Thông báo màn hình khóa"
-          >
-            {notifGranted ? <BellRing className="w-4 h-4 text-blue-500" /> : <Bell className="w-4 h-4 text-white" />}
-          </button>
-
           {/* Page Visibility Manager Button (⚙️ Ẩn/Hiện Trang) */}
           <button
             onClick={onOpenPageManager}
@@ -349,27 +335,6 @@ export default function ConversationSidebar({
             <RefreshCw className="w-4 h-4" />
           </button>
         </div>
-
-        {/* Quick 1-Tap Notification Activation Banner when not yet granted */}
-        {!notifGranted && (
-          <div
-            onClick={handleToggleSoundAndNotification}
-            className="p-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 text-white flex items-center justify-between gap-2 shadow-md cursor-pointer hover:opacity-95 transition-all animate-in fade-in duration-200"
-          >
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-white/20 flex items-center justify-center flex-shrink-0 animate-bounce">
-                <Bell className="w-4 h-4 text-white" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-black leading-tight">Bật Chuông & Màn Hình Khóa</p>
-                <p className="text-[10px] text-blue-100 leading-tight truncate">Rung + Chuông Ting Ting khi có tin nhắn</p>
-              </div>
-            </div>
-            <span className="px-2.5 py-1 rounded-lg bg-white text-blue-600 text-[11px] font-black flex-shrink-0 shadow-sm">
-              Bật Ngay
-            </span>
-          </div>
-        )}
 
         {/* Collapsible Search & Filter Panel (Only shown when user clicks 🔍 Filter button) */}
         {showFilters && (
