@@ -1,17 +1,16 @@
-import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import ConversationSidebar from './ConversationSidebar';
 import ChatThread from './ChatThread';
 import CustomerProfilePanel from './CustomerProfilePanel';
 import UnreadBanner from './UnreadBanner';
+import SharedMediaModal from './SharedMediaModal';
+import OrderCreateModal from './OrderCreateModal';
+import LabelsManagerModal from './LabelsManagerModal';
+import QuickRepliesModal from './QuickRepliesModal';
+import VietQRModal from './VietQRModal';
+import AutoRulesModal from './AutoRulesModal';
+import PageManagerModal from './PageManagerModal';
 import { triggerNewMessageNotification } from '../../services/notificationService';
-
-const SharedMediaModal = lazy(() => import('./SharedMediaModal'));
-const OrderCreateModal = lazy(() => import('./OrderCreateModal'));
-const LabelsManagerModal = lazy(() => import('./LabelsManagerModal'));
-const QuickRepliesModal = lazy(() => import('./QuickRepliesModal'));
-const VietQRModal = lazy(() => import('./VietQRModal'));
-const AutoRulesModal = lazy(() => import('./AutoRulesModal'));
-const PageManagerModal = lazy(() => import('./PageManagerModal'));
 import {
   fetchPages,
   fetchPageConversations,
@@ -979,77 +978,75 @@ function playChimeSound() {
         />
       )}
 
-      {/* Modals with Lazy Suspense */}
-      <Suspense fallback={null}>
-        {activeMediaModal && (
-          <SharedMediaModal
-            media={activeMediaModal}
-            onClose={() => setActiveMediaModal(null)}
-          />
-        )}
+      {/* Modals */}
+      {activeMediaModal && (
+        <SharedMediaModal
+          media={activeMediaModal}
+          onClose={() => setActiveMediaModal(null)}
+        />
+      )}
 
-        {isOrderModalOpen && (
-          <OrderCreateModal
-            conversation={activeConversation}
-            customer={activeConversation}
-            onClose={() => setIsOrderModalOpen(false)}
-            onOrderCreated={handleOrderCreated}
-          />
-        )}
+      {isOrderModalOpen && (
+        <OrderCreateModal
+          conversation={activeConversation}
+          customer={activeConversation}
+          onClose={() => setIsOrderModalOpen(false)}
+          onOrderCreated={handleOrderCreated}
+        />
+      )}
 
-        {isLabelsManagerOpen && (
-          <LabelsManagerModal
-            allLabels={allLabels}
-            allTags={allTags}
-            onLabelsChange={setAllLabels}
-            onTagsChange={setAllTags}
-            onClose={() => setIsLabelsManagerOpen(false)}
-          />
-        )}
+      {isLabelsManagerOpen && (
+        <LabelsManagerModal
+          allLabels={allLabels}
+          allTags={allTags}
+          onLabelsChange={setAllLabels}
+          onTagsChange={setAllTags}
+          onClose={() => setIsLabelsManagerOpen(false)}
+        />
+      )}
 
-        {isQuickRepliesOpen && (
-          <QuickRepliesModal
-            isOpen={isQuickRepliesOpen}
-            onClose={() => setIsQuickRepliesOpen(false)}
-            quickReplies={quickReplies}
-            onSaveQuickReplies={(updated) => {
-              setQuickReplies(updated);
-              localStorage.setItem('metapost_quick_replies', JSON.stringify(updated));
-            }}
-          />
-        )}
+      {isQuickRepliesOpen && (
+        <QuickRepliesModal
+          isOpen={isQuickRepliesOpen}
+          onClose={() => setIsQuickRepliesOpen(false)}
+          quickReplies={quickReplies}
+          onSaveQuickReplies={(updated) => {
+            setQuickReplies(updated);
+            localStorage.setItem('metapost_quick_replies', JSON.stringify(updated));
+          }}
+        />
+      )}
 
-        {isVietQROpen && (
-          <VietQRModal
-            isOpen={isVietQROpen}
-            onClose={() => setIsVietQROpen(false)}
-            customerName={activeConversation?.customer_name}
-            onSendQR={async ({ file, text }) => {
-              if (!activeConversation) return;
-              await handleSendMessage({ text, file, mode: 'messenger' });
-            }}
-          />
-        )}
+      {isVietQROpen && (
+        <VietQRModal
+          isOpen={isVietQROpen}
+          onClose={() => setIsVietQROpen(false)}
+          customerName={activeConversation?.customer_name}
+          onSendQR={async ({ file, text }) => {
+            if (!activeConversation) return;
+            await handleSendMessage({ text, file, mode: 'messenger' });
+          }}
+        />
+      )}
 
-        {isAutoRulesOpen && (
-          <AutoRulesModal
-            isOpen={isAutoRulesOpen}
-            onClose={() => setIsAutoRulesOpen(false)}
-          />
-        )}
+      {isAutoRulesOpen && (
+        <AutoRulesModal
+          isOpen={isAutoRulesOpen}
+          onClose={() => setIsAutoRulesOpen(false)}
+        />
+      )}
 
-        {isPageManagerOpen && (
-          <PageManagerModal
-            allPages={pages}
-            visiblePageIds={visiblePageIds}
-            onSaveVisiblePages={(newIds) => {
-              setVisiblePageIds(newIds);
-              localStorage.setItem('metapost_visible_page_ids', JSON.stringify(newIds));
-            }}
-            onClose={() => setIsPageManagerOpen(false)}
-          />
-        )}
-      </Suspense>
+      {isPageManagerOpen && (
+        <PageManagerModal
+          allPages={pages}
+          visiblePageIds={visiblePageIds}
+          onSaveVisiblePages={(newIds) => {
+            setVisiblePageIds(newIds);
+            localStorage.setItem('metapost_visible_page_ids', JSON.stringify(newIds));
+          }}
+          onClose={() => setIsPageManagerOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -27,9 +27,9 @@ import {
   isNotificationSupported
 } from './services/notificationService';
 
+import TokenModal from './components/common/TokenModal';
 const PostStudio = lazy(() => import('./components/post/PostStudio'));
 const AdsStudio = lazy(() => import('./components/ads/AdsStudio'));
-const TokenModal = lazy(() => import('./components/common/TokenModal'));
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('inbox'); // 'inbox' | 'post' | 'ads'
