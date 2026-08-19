@@ -29,7 +29,8 @@
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     color: #0f172a;
     background-color: #f8fafc;
-    padding-bottom: env(safe-area-inset-bottom, 0);
+    margin: 0;
+    padding: 0;
   }
 
   /* iOS Safe Area Utilities for iPhone Notch & Dynamic Island */
