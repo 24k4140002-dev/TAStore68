@@ -481,36 +481,81 @@ export async function markConversationAsRead(conversationId, pageToken) {
   }
 }
 
-// Send Messenger message
+// Take thread control from other chatbot / handover app (Facebook Handover Protocol)
+export async function takeThreadControl(psid, pageToken) {
+  if (!psid || !pageToken) return null;
+  try {
+    return await safeFetch(`${API_BASE}/me/take_thread_control?access_token=${encodeURIComponent(pageToken)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipient: { id: psid },
+        metadata: 'TAStore68 Takeover'
+      })
+    });
+  } catch (e) {
+    console.warn('takeThreadControl error:', e);
+    return null;
+  }
+}
+
+// Send Messenger message with Auto Handover Protocol Takeover (Fixes Error #10)
 export async function sendMessengerMessage(psid, messageText, pageToken, file = null) {
   if (!psid || !pageToken) throw new Error('Thiếu thông tin người nhận hoặc token');
 
-  if (file) {
-    const formData = new FormData();
-    formData.append('recipient', JSON.stringify({ id: psid }));
-    formData.append('message', JSON.stringify({
-      attachment: {
-        type: file.type.startsWith('image/') ? 'image' : 'file',
-        payload: { is_reusable: true }
-      }
-    }));
-    formData.append('filedata', file);
+  const doSend = async () => {
+    if (file) {
+      const formData = new FormData();
+      formData.append('recipient', JSON.stringify({ id: psid }));
+      formData.append('message', JSON.stringify({
+        attachment: {
+          type: file.type.startsWith('image/') ? 'image' : 'file',
+          payload: { is_reusable: true }
+        }
+      }));
+      formData.append('filedata', file);
+
+      return safeFetch(`${API_BASE}/me/messages?access_token=${encodeURIComponent(pageToken)}`, {
+        method: 'POST',
+        body: formData
+      });
+    }
 
     return safeFetch(`${API_BASE}/me/messages?access_token=${encodeURIComponent(pageToken)}`, {
       method: 'POST',
-      body: formData
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipient: { id: psid },
+        messaging_type: 'RESPONSE',
+        message: { text: messageText }
+      })
     });
-  }
+  };
 
-  return safeFetch(`${API_BASE}/me/messages?access_token=${encodeURIComponent(pageToken)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      recipient: { id: psid },
-      messaging_type: 'RESPONSE',
-      message: { text: messageText }
-    })
-  });
+  try {
+    return await doSend();
+  } catch (err) {
+    const msgLower = (err.message || '').toLowerCase();
+    // Check for Facebook Error #10 / Handover Protocol (Another app currently controls this thread)
+    if (
+      err.code === 10 ||
+      msgLower.includes('kiểm soát thread') ||
+      msgLower.includes('controlling this thread') ||
+      msgLower.includes('handover') ||
+      msgLower.includes('thread_owner') ||
+      msgLower.includes('permission denied to access this thread')
+    ) {
+      try {
+        // Automatically take thread control and retry sending
+        await takeThreadControl(psid, pageToken);
+        await new Promise(r => setTimeout(r, 500));
+        return await doSend();
+      } catch (retryErr) {
+        throw new Error('Fanpage này đang liên kết với một Chatbot/App khác (như Pancake, ManyChat, Fchat...). Đã tự động yêu cầu quyền kiểm soát nhưng chưa được giải phóng. Bạn hãy thử nhắn lại sau vài giây.');
+      }
+    }
+    throw err;
+  }
 }
 
 // Send comment reply
