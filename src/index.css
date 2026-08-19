@@ -32,6 +32,14 @@
     padding-bottom: env(safe-area-inset-bottom, 0);
   }
 
+  /* iOS Safe Area Utilities for iPhone Notch & Dynamic Island */
+  .safe-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
   /* Prevent iOS Safari 115% auto-zoom on input focus */
   @media screen and (max-width: 768px) {
     input, textarea, select {

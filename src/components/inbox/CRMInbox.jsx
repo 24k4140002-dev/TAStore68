@@ -217,7 +217,7 @@ export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitc
 
         // New Message Audio & Lock Screen Notification Trigger
         const prevSnippet = knownMessagesMapRef.current[c.fb_conversation_id];
-        if (prevSnippet !== undefined && prevSnippet !== c.snippet && c.unread_count > 0) {
+        if (prevSnippet !== undefined && prevSnippet !== c.snippet && Boolean(c.snippet)) {
           triggerNewMessageNotification({
             pageId: c.page_id,
             pageName: c.page_name,
@@ -498,13 +498,17 @@ function playChimeSound() {
   useEffect(() => {
     if (!activeConversation?.fb_conversation_id || !fbToken) return;
 
+    const convId = activeConversation.fb_conversation_id;
     const pageId = activeConversation.page_id;
+    const pageName = activeConversation.page_name;
+    const customerName = activeConversation.customer_name;
+    const avatarUrl = activeConversation.avatar_url;
     const token = activeConversation.page_token || fbToken;
 
     const pollTimer = setInterval(async () => {
       if (document.hidden) return;
       try {
-        const latestMsgs = await fetchConversationMessages(convId, token);
+        const latestMsgs = await fetchConversationMessages(convId, token, null, 100);
         if (latestMsgs && latestMsgs.length > 0) {
           setMessages(prev => {
             const prevIds = new Set(prev.map(m => m.id));
@@ -513,8 +517,17 @@ function playChimeSound() {
               // Check if newest message came from customer (not page)
               const lastMsg = latestMsgs[latestMsgs.length - 1];
               if (lastMsg?.from?.id && lastMsg.from.id !== pageId) {
-                playChimeSound();
+                triggerNewMessageNotification({
+                  pageId,
+                  pageName,
+                  convId,
+                  customerName,
+                  messageText: lastMsg.message || 'Khách hàng vừa gửi tin nhắn mới',
+                  avatarUrl,
+                  playSound: true
+                });
               }
+              localStorage.setItem(`metapost_msgs_${convId}`, JSON.stringify(latestMsgs));
               sessionStorage.setItem(`metapost_msgs_${convId}`, JSON.stringify(latestMsgs));
               return latestMsgs;
             }
@@ -522,10 +535,18 @@ function playChimeSound() {
           });
         }
       } catch (e) {}
-    }, 4000);
+    }, 3500);
 
     return () => clearInterval(pollTimer);
-  }, [activeConversation?.fb_conversation_id, activeConversation?.page_id, activeConversation?.page_token, fbToken]);
+  }, [
+    activeConversation?.fb_conversation_id,
+    activeConversation?.page_id,
+    activeConversation?.page_name,
+    activeConversation?.customer_name,
+    activeConversation?.avatar_url,
+    activeConversation?.page_token,
+    fbToken
+  ]);
 
   // 6. Send Message Handler with Optimistic UI
   const handleSendMessage = async ({ text, file, mode }) => {

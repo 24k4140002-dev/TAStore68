@@ -145,8 +145,9 @@ export default function App() {
 
   return (
     <div className="h-full h-[100dvh] w-full flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden font-sans fixed inset-0">
-      {/* Top Main Navigation Header (Always accessible across Mobile & Desktop) */}
-      <header className={`${isFocusMode ? 'hidden' : 'flex'} h-[48px] sm:h-[56px] flex-shrink-0 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 px-2.5 sm:px-4 lg:px-6 items-center justify-between z-30`}>
+      {/* Top Main Navigation Header (Always accessible across Mobile & Desktop, safe from iPhone Notch) */}
+      <header className={`${isFocusMode ? 'hidden' : 'flex'} flex-col justify-center flex-shrink-0 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 pt-[env(safe-area-inset-top,0px)] z-30`}>
+        <div className="h-[48px] sm:h-[56px] w-full px-2.5 sm:px-4 lg:px-6 flex items-center justify-between">
         {/* Left: Brand Logo & Module Tabs */}
         <div className="flex items-center gap-2 sm:gap-4 lg:gap-6">
           <div className="flex items-center gap-2">
@@ -261,6 +262,7 @@ export default function App() {
           >
             {theme === 'dark' ? <Sun className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400" /> : <Moon className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-600" />}
           </button>
+        </div>
         </div>
       </header>
 

@@ -66,10 +66,40 @@ function generateChimeDataUri() {
 
 const CHIME_DATA_URI = generateChimeDataUri();
 
+let globalAudioEl = null;
+
+function getOrCreateAudioElement() {
+  if (typeof document === 'undefined') return null;
+  if (!globalAudioEl) {
+    globalAudioEl = document.getElementById('meta-global-chime');
+    if (!globalAudioEl) {
+      globalAudioEl = document.createElement('audio');
+      globalAudioEl.id = 'meta-global-chime';
+      globalAudioEl.src = CHIME_DATA_URI;
+      globalAudioEl.preload = 'auto';
+      globalAudioEl.setAttribute('playsinline', 'true');
+      globalAudioEl.setAttribute('webkit-playsinline', 'true');
+      globalAudioEl.style.display = 'none';
+      if (document.body) {
+        document.body.appendChild(globalAudioEl);
+      }
+    }
+  }
+  return globalAudioEl;
+}
+
 // Audio Unlocker for iOS Safari & Android
 export function unlockAudio() {
-  if (isAudioUnlocked) return;
   try {
+    const el = getOrCreateAudioElement();
+    if (el) {
+      el.play().then(() => {
+        el.pause();
+        el.currentTime = 0;
+        isAudioUnlocked = true;
+      }).catch(() => {});
+    }
+
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (AudioContextClass && !audioCtx) {
       audioCtx = new AudioContextClass();
@@ -78,14 +108,13 @@ export function unlockAudio() {
       if (audioCtx.state === 'suspended') {
         audioCtx.resume().catch(() => {});
       }
-      // Play a short silent buffer to unlock iOS audio pipeline
       const buffer = audioCtx.createBuffer(1, 1, 22050);
       const source = audioCtx.createBufferSource();
       source.buffer = buffer;
       source.connect(audioCtx.destination);
       source.start(0);
+      isAudioUnlocked = true;
     }
-    isAudioUnlocked = true;
   } catch (e) {
     console.warn('Audio unlock error:', e);
   }
@@ -93,8 +122,8 @@ export function unlockAudio() {
 
 // Auto-unlock on first user tap anywhere on the screen
 if (typeof window !== 'undefined') {
-  ['click', 'touchstart', 'touchend', 'keydown'].forEach(evt => {
-    window.addEventListener(evt, unlockAudio, { once: true, passive: true });
+  ['click', 'touchstart', 'touchend', 'pointerdown', 'keydown'].forEach(evt => {
+    window.addEventListener(evt, unlockAudio, { once: false, passive: true });
   });
 }
 
@@ -103,19 +132,32 @@ if (typeof window !== 'undefined') {
  */
 export function playNotificationChime() {
   try {
-    unlockAudio();
+    // 1. Device Vibration (Haptic feedback on phones)
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try { navigator.vibrate([200, 100, 200]); } catch {}
+    }
 
-    // 1. Primary: HTML5 Audio with Base64 data URI (Works 100% on iOS & Android background/foreground)
-    const audio = new Audio(CHIME_DATA_URI);
-    audio.volume = 0.85;
-    const playPromise = audio.play();
-    if (playPromise !== undefined) {
-      playPromise.catch(() => {
-        // Fallback: Web Audio API
-        if (audioCtx && audioCtx.state === 'running') {
-          playWebAudioChime(audioCtx);
-        }
-      });
+    // 2. Primed HTML5 Audio element (Works 100% on iOS PWA & Safari)
+    const el = getOrCreateAudioElement();
+    if (el) {
+      el.currentTime = 0;
+      const playPromise = el.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {
+          // Fallback: Web Audio API
+          if (audioCtx) {
+            if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+            playWebAudioChime(audioCtx);
+          }
+        });
+      }
+      return;
+    }
+
+    // 3. Fallback: Web Audio API
+    if (audioCtx) {
+      if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+      playWebAudioChime(audioCtx);
     }
   } catch (e) {
     console.warn('Play chime error:', e);

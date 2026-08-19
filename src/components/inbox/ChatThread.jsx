@@ -221,9 +221,10 @@ export default function ChatThread({
 
   return (
     <main className="flex-1 flex flex-col min-w-0 bg-slate-50/50 dark:bg-slate-950/40 relative overflow-hidden h-full">
-      {/* Header (Solid background & touch-friendly for Safari) */}
-      <div className="h-14 sm:h-16 px-3 sm:px-4 lg:px-6 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between z-10 flex-shrink-0">
-        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+      {/* Header (Solid background & touch-friendly with iPhone Notch safe area) */}
+      <div className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 z-10 flex-shrink-0 pt-[env(safe-area-inset-top,0px)] md:pt-0">
+        <div className="h-14 sm:h-16 px-3 sm:px-4 lg:px-6 flex items-center justify-between">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
           {/* Mobile Back Button (Large 44px tap target) */}
           <button
             type="button"
@@ -304,6 +305,7 @@ export default function ChatThread({
           >
             <Info className="w-4 h-4" />
           </button>
+        </div>
         </div>
       </div>
 
@@ -536,8 +538,8 @@ export default function ChatThread({
       <div ref={messagesEndRef} />
       </div>
 
-      {/* Bottom Reply Area (Sleek Compact iOS-style) */}
-      <div className="p-2 sm:p-3 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1.5 relative flex-shrink-0">
+      {/* Bottom Reply Area (Sleek Compact iOS-style with safe area) */}
+      <div className="p-2 sm:p-3 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1.5 relative flex-shrink-0">
         {/* Floating '/' Shortcut Dropdown */}
         {shortcutQuery && matchingReplies.length > 0 && (
           <div className="absolute bottom-[calc(100%+8px)] left-3 right-3 bg-white dark:bg-slate-800 border border-brand-300 dark:border-brand-700 rounded-2xl shadow-2xl p-2 z-30 max-h-64 overflow-y-auto space-y-1 animate-in fade-in slide-in-from-bottom-2 duration-150">
