@@ -87,13 +87,21 @@ export async function safeFetch(url, options = {}, timeoutMs = 20000) {
       throw new Error(`Phản hồi không hợp lệ từ Facebook (${res.status})`);
     }
     if (!res.ok || json?.error) {
-      let msg = json?.error?.message || `HTTP ${res.status}: ${res.statusText}`;
-      const code = json?.error?.code;
+      const facebookError = json?.error || {};
+      const originalMessage = facebookError.message || `HTTP ${res.status}: ${res.statusText}`;
+      let msg = originalMessage;
+      const code = facebookError.code;
       if (code === 4 || code === 17 || code === 32 || code === 613 || String(msg).toLowerCase().includes('limit reach')) {
         msg = 'Facebook đang giới hạn số lượt yêu cầu trong chốc lát (Rate limit #4). Vui lòng đợi 1-2 phút rồi thử lại.';
       }
       const err = new Error(msg);
       err.code = code;
+      err.subcode = facebookError.error_subcode;
+      err.facebookMessage = originalMessage;
+      err.facebookType = facebookError.type;
+      err.userTitle = facebookError.error_user_title;
+      err.userMessage = facebookError.error_user_msg;
+      err.httpStatus = res.status;
       throw err;
     }
     return json;
@@ -484,11 +492,105 @@ export async function markConversationAsRead(conversationId, pageToken) {
   }
 }
 
-// Take or Request thread control from other chatbot / handover app (Facebook Handover Protocol)
+const PAGE_INBOX_APP_ID = '263902037430900';
+
+function getFacebookErrorText(error) {
+  return [
+    error?.message,
+    error?.facebookMessage,
+    error?.userTitle,
+    error?.userMessage
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+export function isThreadControlError(error) {
+  const text = getFacebookErrorText(error);
+  return Number(error?.subcode) === 2018300 || (
+    Number(error?.code) === 10 && (
+      text.includes('another app') ||
+      text.includes('controlling this thread') ||
+      text.includes('controls this thread') ||
+      text.includes('thread owner') ||
+      text.includes('thread_owner') ||
+      text.includes('handover') ||
+      text.includes('permission denied to access this thread') ||
+      text.includes('kiểm soát thread')
+    )
+  );
+}
+
+export function formatMessengerSendError(error, ownerAppId = '') {
+  const text = getFacebookErrorText(error);
+  const code = error?.code ? `#${error.code}` : '';
+  const subcode = error?.subcode ? `/${error.subcode}` : '';
+  const errorCode = code ? ` (Meta ${code}${subcode})` : '';
+
+  if (isThreadControlError(error)) {
+    const ownerLabel = ownerAppId === PAGE_INBOX_APP_ID
+      ? 'Hộp thư Trang của Meta'
+      : (ownerAppId ? `app ID ${ownerAppId}` : 'một ứng dụng Messenger khác');
+    return new Error(
+      `Cuộc trò chuyện vẫn đang do ${ownerLabel} kiểm soát${errorCode}. ` +
+      'Vào Facebook Page → Cài đặt → Thiết lập Trang → Định tuyến cuộc trò chuyện Messenger, ' +
+      'gỡ ứng dụng mặc định; sau đó vào Nhắn tin nâng cao và bật “Giành quyền kiểm soát cuộc trò chuyện” cho app đang cấp token MetaPost Studio.'
+    );
+  }
+
+  if (
+    text.includes('24 hour') ||
+    text.includes('24-hour') ||
+    text.includes('allowed window') ||
+    text.includes('outside the window') ||
+    text.includes('outside of the allowed')
+  ) {
+    return new Error(
+      `Đã quá cửa sổ nhắn tin 24 giờ của Meta${errorCode}. Khách cần nhắn lại Fanpage trước khi bạn có thể phản hồi bằng tin nhắn thường.`
+    );
+  }
+
+  if (
+    Number(error?.code) === 190 ||
+    text.includes('access token') && (text.includes('expired') || text.includes('invalid'))
+  ) {
+    return new Error(`Facebook Token đã hết hạn hoặc không còn hợp lệ${errorCode}. Hãy tạo token mới rồi kết nối lại Fanpage.`);
+  }
+
+  if (
+    text.includes('pages_messaging') ||
+    text.includes('permission') ||
+    Number(error?.code) === 200
+  ) {
+    return new Error(
+      `Token hoặc ứng dụng Meta đang thiếu quyền gửi Messenger${errorCode}. ` +
+      'Hãy cấp pages_messaging cho đúng Meta App đã tạo token và kết nối lại Fanpage.'
+    );
+  }
+
+  const publicMessage = error?.userMessage || error?.facebookMessage || error?.message || 'Meta từ chối gửi tin nhắn.';
+  return new Error(`${publicMessage}${errorCode}`);
+}
+
+// Read the current owner so the UI can identify a stale routing lock by App ID.
+export async function fetchThreadOwner(psid, pageToken) {
+  if (!psid || !pageToken) return '';
+  try {
+    const res = await safeFetch(
+      `${API_BASE}/me/thread_owner?recipient=${encodeURIComponent(psid)}&access_token=${encodeURIComponent(pageToken)}`
+    );
+    const owner = res?.data?.[0]?.thread_owner || res?.data?.[0]?.threadOwner;
+    return String(owner?.app_id || owner?.appId || '');
+  } catch {
+    return '';
+  }
+}
+
+// Take or request thread control from another chatbot / handover app (Facebook Handover Protocol).
 export async function takeThreadControl(psid, pageToken) {
   if (!psid || !pageToken) return null;
 
-  // 1. Try take_thread_control (Works if this App is Primary Receiver)
+  let takeoverError = null;
+
+  // Primary Receiver can take control immediately.
   try {
     const res = await safeFetch(`${API_BASE}/me/take_thread_control?access_token=${encodeURIComponent(pageToken)}`, {
       method: 'POST',
@@ -498,12 +600,12 @@ export async function takeThreadControl(psid, pageToken) {
         metadata: 'TAStore68 Takeover'
       })
     });
-    if (res?.success) return res;
+    if (res?.success) return { ...res, action: 'taken' };
   } catch (e) {
-    console.warn('take_thread_control fallback:', e?.message);
+    takeoverError = e;
   }
 
-  // 2. Try request_thread_control (Works if this App is Secondary Receiver)
+  // A Secondary Receiver can only request control. The current owner must release it.
   try {
     const res = await safeFetch(`${API_BASE}/me/request_thread_control?access_token=${encodeURIComponent(pageToken)}`, {
       method: 'POST',
@@ -513,32 +615,19 @@ export async function takeThreadControl(psid, pageToken) {
         metadata: 'TAStore68 Request'
       })
     });
-    if (res?.success) return res;
+    if (res?.success) return { ...res, action: 'requested', takeoverError };
   } catch (e) {
-    console.warn('request_thread_control fallback:', e?.message);
+    return { success: false, action: 'failed', takeoverError, requestError: e };
   }
 
-  // 3. Try releasing to Page Inbox (Meta Business Suite default App ID 263902037430900)
-  try {
-    await safeFetch(`${API_BASE}/me/pass_thread_control?access_token=${encodeURIComponent(pageToken)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        recipient: { id: psid },
-        target_app_id: '263902037430900',
-        metadata: 'Pass to Page Inbox'
-      })
-    });
-  } catch {}
-
-  return null;
+  return { success: false, action: 'failed', takeoverError };
 }
 
-// Send Messenger message with Auto Handover Protocol Takeover (Fixes Error #10)
+// Send Messenger message and only invoke Handover Protocol for the exact thread-control error.
 export async function sendMessengerMessage(psid, messageText, pageToken, file = null) {
   if (!psid || !pageToken) throw new Error('Thiếu thông tin người nhận hoặc token');
 
-  const doSend = async (tag = null) => {
+  const doSend = async () => {
     if (file) {
       const formData = new FormData();
       formData.append('recipient', JSON.stringify({ id: psid }));
@@ -560,11 +649,6 @@ export async function sendMessengerMessage(psid, messageText, pageToken, file = 
       recipient: { id: psid },
       message: { text: messageText }
     };
-    if (tag) {
-      payload.messaging_type = 'MESSAGE_TAG';
-      payload.tag = tag;
-    }
-
     return safeFetch(`${API_BASE}/me/messages?access_token=${encodeURIComponent(pageToken)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -575,31 +659,18 @@ export async function sendMessengerMessage(psid, messageText, pageToken, file = 
   try {
     return await doSend();
   } catch (err) {
-    const msgLower = (err.message || '').toLowerCase();
-    // Check for Facebook Error #10 / Handover Protocol (Another app currently controls this thread)
-    if (
-      err.code === 10 ||
-      msgLower.includes('kiểm soát thread') ||
-      msgLower.includes('controlling this thread') ||
-      msgLower.includes('handover') ||
-      msgLower.includes('thread_owner') ||
-      msgLower.includes('permission denied to access this thread')
-    ) {
-      // 1. Try sending with MESSAGE_TAG bypass
+    if (isThreadControlError(err)) {
+      const ownerBeforeTakeover = await fetchThreadOwner(psid, pageToken);
       try {
-        return await doSend('CONFIRMED_EVENT_UPDATE');
-      } catch {}
-
-      // 2. Try automatic takeover and retry
-      try {
-        await takeThreadControl(psid, pageToken);
-        await new Promise(r => setTimeout(r, 400));
+        const takeover = await takeThreadControl(psid, pageToken);
+        await new Promise(r => setTimeout(r, takeover?.action === 'taken' ? 350 : 800));
         return await doSend();
       } catch (retryErr) {
-        throw new Error('Fanpage này đang bị khóa luồng chat bởi app khác hoặc hết phiên 24h. Hãy thử nhắn lại hoặc vào Cài đặt Trang -> Nhắn tin nâng cao -> Chọn Hộp thư Trang nhé.');
+        const ownerAfterTakeover = await fetchThreadOwner(psid, pageToken);
+        throw formatMessengerSendError(retryErr, ownerAfterTakeover || ownerBeforeTakeover);
       }
     }
-    throw err;
+    throw formatMessengerSendError(err);
   }
 }
 

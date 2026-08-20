@@ -89,6 +89,7 @@ export default function ChatThread({
   const [attachedFile, setAttachedFile] = useState(null);
   const [attachedFilePreview, setAttachedFilePreview] = useState(null);
   const [isSending, setIsSending] = useState(false);
+  const [sendError, setSendError] = useState('');
   const [shortcutQuery, setShortcutQuery] = useState(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -147,6 +148,7 @@ export default function ChatThread({
     if (!finalContent && !attachedFile) return;
 
     setIsSending(true);
+    setSendError('');
     try {
       if (onSendMessage) {
         await onSendMessage({
@@ -158,7 +160,7 @@ export default function ChatThread({
       setReplyText('');
       handleRemoveFile();
     } catch (err) {
-      alert('Lỗi gửi tin nhắn: ' + err.message);
+      setSendError(err.message || 'Không thể gửi tin nhắn qua Meta.');
     } finally {
       setIsSending(false);
     }
@@ -644,6 +646,21 @@ export default function ChatThread({
             </div>
             <button onClick={handleRemoveFile} className="p-1 text-slate-400 hover:text-red-500">
               <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {sendError && (
+          <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/70 dark:bg-red-950/40 dark:text-red-300">
+            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            <p className="flex-1 leading-relaxed">{sendError}</p>
+            <button
+              type="button"
+              onClick={() => setSendError('')}
+              className="rounded p-0.5 text-red-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/50"
+              aria-label="Đóng thông báo lỗi"
+            >
+              <X className="h-3.5 w-3.5" />
             </button>
           </div>
         )}

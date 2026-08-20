@@ -1,4 +1,4 @@
-# TAStore68 Pro (v3.6.0) 🚀 — Hệ Thống Đăng Bài & CRM Fanpage Facebook Đa Kênh
+# TAStore68 Pro (v3.6.1) 🚀 — Hệ Thống Đăng Bài & CRM Fanpage Facebook Đa Kênh
 
 **TAStore68 Pro** là hệ sinh thái Web App chuyên nghiệp kết hợp giữa **Quản Lý Hội Thoại CRM Inbox Đa Page** và **Studio Đăng Bài Đa Phương Tiện (Ảnh/Album/Video)** đồng thời lên hàng loạt Fanpage Facebook.
 
