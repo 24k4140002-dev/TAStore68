@@ -484,11 +484,13 @@ export async function markConversationAsRead(conversationId, pageToken) {
   }
 }
 
-// Take thread control from other chatbot / handover app (Facebook Handover Protocol)
+// Take or Request thread control from other chatbot / handover app (Facebook Handover Protocol)
 export async function takeThreadControl(psid, pageToken) {
   if (!psid || !pageToken) return null;
+
+  // 1. Try take_thread_control (Works if this App is Primary Receiver)
   try {
-    return await safeFetch(`${API_BASE}/me/take_thread_control?access_token=${encodeURIComponent(pageToken)}`, {
+    const res = await safeFetch(`${API_BASE}/me/take_thread_control?access_token=${encodeURIComponent(pageToken)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -496,10 +498,40 @@ export async function takeThreadControl(psid, pageToken) {
         metadata: 'TAStore68 Takeover'
       })
     });
+    if (res?.success) return res;
   } catch (e) {
-    console.warn('takeThreadControl error:', e);
-    return null;
+    console.warn('take_thread_control fallback:', e?.message);
   }
+
+  // 2. Try request_thread_control (Works if this App is Secondary Receiver)
+  try {
+    const res = await safeFetch(`${API_BASE}/me/request_thread_control?access_token=${encodeURIComponent(pageToken)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipient: { id: psid },
+        metadata: 'TAStore68 Request'
+      })
+    });
+    if (res?.success) return res;
+  } catch (e) {
+    console.warn('request_thread_control fallback:', e?.message);
+  }
+
+  // 3. Try releasing to Page Inbox (Meta Business Suite default App ID 263902037430900)
+  try {
+    await safeFetch(`${API_BASE}/me/pass_thread_control?access_token=${encodeURIComponent(pageToken)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipient: { id: psid },
+        target_app_id: '263902037430900',
+        metadata: 'Pass to Page Inbox'
+      })
+    });
+  } catch {}
+
+  return null;
 }
 
 // Send Messenger message with Auto Handover Protocol Takeover (Fixes Error #10)
