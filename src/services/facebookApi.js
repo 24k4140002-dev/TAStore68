@@ -538,7 +538,7 @@ export async function takeThreadControl(psid, pageToken) {
 export async function sendMessengerMessage(psid, messageText, pageToken, file = null) {
   if (!psid || !pageToken) throw new Error('Thiếu thông tin người nhận hoặc token');
 
-  const doSend = async () => {
+  const doSend = async (tag = null) => {
     if (file) {
       const formData = new FormData();
       formData.append('recipient', JSON.stringify({ id: psid }));
@@ -556,14 +556,19 @@ export async function sendMessengerMessage(psid, messageText, pageToken, file = 
       });
     }
 
+    const payload = {
+      recipient: { id: psid },
+      message: { text: messageText }
+    };
+    if (tag) {
+      payload.messaging_type = 'MESSAGE_TAG';
+      payload.tag = tag;
+    }
+
     return safeFetch(`${API_BASE}/me/messages?access_token=${encodeURIComponent(pageToken)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        recipient: { id: psid },
-        messaging_type: 'RESPONSE',
-        message: { text: messageText }
-      })
+      body: JSON.stringify(payload)
     });
   };
 
@@ -580,13 +585,18 @@ export async function sendMessengerMessage(psid, messageText, pageToken, file = 
       msgLower.includes('thread_owner') ||
       msgLower.includes('permission denied to access this thread')
     ) {
+      // 1. Try sending with MESSAGE_TAG bypass
       try {
-        // Automatically take thread control and retry sending
+        return await doSend('CONFIRMED_EVENT_UPDATE');
+      } catch {}
+
+      // 2. Try automatic takeover and retry
+      try {
         await takeThreadControl(psid, pageToken);
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 400));
         return await doSend();
       } catch (retryErr) {
-        throw new Error('Fanpage này đang liên kết với một Chatbot/App khác (như Pancake, ManyChat, Fchat...). Đã tự động yêu cầu quyền kiểm soát nhưng chưa được giải phóng. Bạn hãy thử nhắn lại sau vài giây.');
+        throw new Error('Fanpage này đang bị khóa luồng chat bởi app khác hoặc hết phiên 24h. Hãy thử nhắn lại hoặc vào Cài đặt Trang -> Nhắn tin nâng cao -> Chọn Hộp thư Trang nhé.');
       }
     }
     throw err;
