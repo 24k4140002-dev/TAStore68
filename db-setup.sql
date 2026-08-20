@@ -175,15 +175,20 @@ ALTER TABLE tags ENABLE ROW LEVEL SECURITY;
 ALTER TABLE customer_tags ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notes ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Allow authenticated and anon access" ON campaigns FOR ALL USING (true);
-CREATE POLICY "Allow authenticated and anon access" ON customers FOR ALL USING (true);
-CREATE POLICY "Allow authenticated and anon access" ON conversations FOR ALL USING (true);
-CREATE POLICY "Allow authenticated and anon access" ON messages FOR ALL USING (true);
-CREATE POLICY "Allow authenticated and anon access" ON labels FOR ALL USING (true);
-CREATE POLICY "Allow authenticated and anon access" ON conversation_labels FOR ALL USING (true);
-CREATE POLICY "Allow authenticated and anon access" ON tags FOR ALL USING (true);
-CREATE POLICY "Allow authenticated and anon access" ON customer_tags FOR ALL USING (true);
-CREATE POLICY "Allow authenticated and anon access" ON notes FOR ALL USING (true);
+-- Secure-by-default: remove the legacy public policies if this bootstrap is
+-- re-run on an existing project. No anon/authenticated base-table policies are
+-- created here. A trusted server using the Supabase service role can bypass
+-- RLS; add narrowly scoped policies only when an authenticated product flow is
+-- implemented and tested.
+DROP POLICY IF EXISTS "Allow authenticated and anon access" ON campaigns;
+DROP POLICY IF EXISTS "Allow authenticated and anon access" ON customers;
+DROP POLICY IF EXISTS "Allow authenticated and anon access" ON conversations;
+DROP POLICY IF EXISTS "Allow authenticated and anon access" ON messages;
+DROP POLICY IF EXISTS "Allow authenticated and anon access" ON labels;
+DROP POLICY IF EXISTS "Allow authenticated and anon access" ON conversation_labels;
+DROP POLICY IF EXISTS "Allow authenticated and anon access" ON tags;
+DROP POLICY IF EXISTS "Allow authenticated and anon access" ON customer_tags;
+DROP POLICY IF EXISTS "Allow authenticated and anon access" ON notes;
 
 -- ============================================================
 -- ✅ DONE! Schema setup with RLS complete.

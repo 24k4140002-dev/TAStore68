@@ -1,4 +1,4 @@
-# TAStore68 Pro (v3.5.0) 🚀 — Hệ Thống Đăng Bài & CRM Fanpage Facebook Đa Kênh
+# TAStore68 Pro (v3.6.0) 🚀 — Hệ Thống Đăng Bài & CRM Fanpage Facebook Đa Kênh
 
 **TAStore68 Pro** là hệ sinh thái Web App chuyên nghiệp kết hợp giữa **Quản Lý Hội Thoại CRM Inbox Đa Page** và **Studio Đăng Bài Đa Phương Tiện (Ảnh/Album/Video)** đồng thời lên hàng loạt Fanpage Facebook.
 
@@ -28,8 +28,9 @@
 - **Lên lịch đăng bài (Schedule):** Hẹn giờ đăng chuẩn Graph API.
 
 ### 🔒 3. Bảo Mật & Kiến Trúc Hiện Đại
-- **Kiến trúc Vercel Serverless `/api/*`:** Đổi Token vĩnh viễn an toàn trên Server (`api/meta/exchange-token.js`), không bao giờ để lộ `App Secret` trên trình duyệt.
-- **Đồng bộ Mobile 1-Scan:** Tạo mã QR đăng nhập nhanh trên máy tính để camera iPhone/Android quét là đăng nhập ngay lập tức.
+- **Kiến trúc Vercel Serverless `/api/*`:** Đổi token dài hạn trên server; `App Secret` không đi vào trình duyệt.
+- **Đồng bộ Mobile 1-Scan:** Mã QR được tạo ngay trên thiết bị, không gửi token tới dịch vụ tạo QR bên thứ ba.
+- **Webhook có xác thực:** Chỉ nhận payload có chữ ký `X-Hub-Signature-256` hợp lệ và không log nội dung khách hàng.
 - **Công nghệ cốt lõi:** React 19, Vite, Tailwind CSS, Lucide Icons, Canvas Confetti.
 
 ---
@@ -46,7 +47,9 @@ Tạo file `.env.local` dựa trên mẫu `.env.example`:
 ```env
 META_APP_ID=your_app_id
 META_APP_SECRET=your_app_secret
-META_GRAPH_VERSION=v19.0
+META_GRAPH_VERSION=v26.0
+VITE_META_GRAPH_VERSION=v26.0
+FB_WEBHOOK_VERIFY_TOKEN=your_long_random_verify_token
 ```
 
 ### 3. Khởi chạy máy chủ phát triển (Vite Dev Server):
@@ -67,9 +70,12 @@ npm run build
 Dự án đã được cấu hình tối ưu sẵn cho Vercel:
 1. Đẩy code lên GitHub Repository.
 2. Import project vào [Vercel Dashboard](https://vercel.com).
-3. Thêm 2 biến môi trường trong **Project Settings $\rightarrow$ Environment Variables**:
+3. Thêm biến môi trường trong **Project Settings $\rightarrow$ Environment Variables**:
    - `META_APP_ID`
    - `META_APP_SECRET`
+   - `META_GRAPH_VERSION=v26.0`
+   - `VITE_META_GRAPH_VERSION=v26.0`
+   - `FB_WEBHOOK_VERIFY_TOKEN` nếu bật webhook Messenger
 4. Deploy tự động và sử dụng đường dẫn production `https://metapost-studio.vercel.app`!
 
 ---

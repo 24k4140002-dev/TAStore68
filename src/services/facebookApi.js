@@ -1,4 +1,7 @@
-export const META_GRAPH_VERSION = 'v19.0';
+const configuredGraphVersion = import.meta.env?.VITE_META_GRAPH_VERSION || 'v26.0';
+export const META_GRAPH_VERSION = /^v\d+\.\d+$/.test(configuredGraphVersion)
+  ? configuredGraphVersion
+  : 'v26.0';
 export const API_BASE = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
 
 // Strip invisible characters, smart quotes, zero-width spaces, and newlines (common on iOS)
@@ -856,40 +859,28 @@ export function getFacebookPostUrl(pageId, postId) {
   return `https://www.facebook.com/${pageId}/posts/${postId}`;
 }
 
-// Exchange short-lived token for long-lived permanent token (via Vercel Serverless /api/meta/exchange-token)
-export async function exchangePermanentToken(shortToken, customAppId = '', customAppSecret = '') {
+// Exchange a short-lived user token for a long-lived token via the server.
+// App credentials never enter the browser bundle.
+export async function exchangePermanentToken(shortToken) {
   const cleanShort = cleanFacebookToken(shortToken);
   if (!cleanShort) {
     throw new Error('Vui lòng nhập Token ngắn hạn (bắt đầu bằng EAA...)');
   }
 
-  // Attempt serverless endpoint first (keeps App Secret safe on server)
-  try {
-    const res = await fetch('/api/meta/exchange-token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        shortToken: cleanShort,
-        appId: customAppId,
-        appSecret: customAppSecret
-      })
-    });
+  const res = await fetch('/api/meta/exchange-token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify({ shortToken: cleanShort })
+  });
 
-    const data = await res.json();
-    if (res.ok && data.access_token) {
-      return data.access_token;
-    }
-    if (data.error && !customAppId) {
-      throw new Error(data.error);
-    }
-  } catch (e) {
-    if (!customAppId || !customAppSecret) throw e;
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.access_token) {
+    throw new Error(data?.error || `Không thể đổi Token (HTTP ${res.status}).`);
   }
-
-  // Direct Graph API fallback if custom credentials provided
-  const exchangeUrl = `${API_BASE}/oauth/access_token?grant_type=fb_exchange_token&client_id=${encodeURIComponent(customAppId)}&client_secret=${encodeURIComponent(customAppSecret)}&fb_exchange_token=${encodeURIComponent(cleanShort)}`;
-  const directRes = await safeFetch(exchangeUrl);
-  return directRes.access_token;
+  return data.access_token;
 }
 
 // Fetch assigned custom labels for a specific customer (PSID)

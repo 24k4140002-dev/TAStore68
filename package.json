@@ -1,18 +1,21 @@
 {
   "name": "metapost-studio",
   "private": true,
-  "version": "3.5.0",
+  "version": "3.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test",
+    "check": "node --check api/meta/exchange-token.js && node --check api/webhook.js && npm test && npm run build"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
     "canvas-confetti": "^1.9.4",
     "clsx": "^2.1.1",
     "lucide-react": "^0.475.0",
+    "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tailwind-merge": "^3.0.2"

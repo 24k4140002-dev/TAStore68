@@ -1,54 +1,74 @@
-// Serverless Webhook Receiver for Meta Graph API Messenger Webhooks (Vercel Endpoint)
-// URL: https://metapost-studio.vercel.app/api/webhook
+import crypto from 'node:crypto';
 
-const VERIFY_TOKEN = process.env.FB_WEBHOOK_VERIFY_TOKEN || 'tastore68_webhook_token_2026';
+const TEXT_HEADERS = {
+  'Cache-Control': 'no-store, max-age=0',
+  'Content-Type': 'text/plain; charset=utf-8',
+  'X-Content-Type-Options': 'nosniff'
+};
 
-export default async function handler(req, res) {
-  // 1. Handle Facebook Webhook Verification Challenge (GET)
-  if (req.method === 'GET') {
-    const mode = req.query['hub.mode'];
-    const token = req.query['hub.verify_token'];
-    const challenge = req.query['hub.challenge'];
-
-    if (mode === 'subscribe' && (token === VERIFY_TOKEN || token === 'tastore68')) {
-      console.log('Facebook Webhook Verified Successfully!');
-      return res.status(200).send(challenge);
-    }
-    return res.status(403).json({ error: 'Verification token mismatch' });
-  }
-
-  // 2. Handle Incoming Message Events (POST)
-  if (req.method === 'POST') {
-    const body = req.body;
-
-    if (body.object === 'page') {
-      try {
-        body.entry?.forEach((entry) => {
-          const pageId = entry.id;
-          const time = entry.time;
-
-          // Process Messaging Events
-          entry.messaging?.forEach((event) => {
-            const senderId = event.sender?.id;
-            const recipientId = event.recipient?.id;
-            const message = event.message;
-
-            if (message && !message.is_echo) {
-              console.log(`[New Message on Page ${pageId} from ${senderId}]:`, message.text || '[Attachment]');
-              // Here server can dispatch Web Push notification to subscribed APNs / FCM tokens
-            }
-          });
-        });
-
-        return res.status(200).send('EVENT_RECEIVED');
-      } catch (err) {
-        console.error('Webhook processing error:', err);
-        return res.status(200).send('EVENT_RECEIVED');
-      }
-    }
-
-    return res.status(404).send('Not a page event');
-  }
-
-  return res.status(405).json({ error: 'Method not allowed' });
+function text(body, status = 200) {
+  return new Response(body, { status, headers: TEXT_HEADERS });
 }
+
+function signaturesMatch(rawBody, signatureHeader, appSecret) {
+  if (!signatureHeader?.startsWith('sha256=')) return false;
+
+  const expected = `sha256=${crypto
+    .createHmac('sha256', appSecret)
+    .update(rawBody)
+    .digest('hex')}`;
+
+  const receivedBuffer = Buffer.from(signatureHeader);
+  const expectedBuffer = Buffer.from(expected);
+  return receivedBuffer.length === expectedBuffer.length
+    && crypto.timingSafeEqual(receivedBuffer, expectedBuffer);
+}
+
+async function handleRequest(request) {
+  const url = new URL(request.url);
+  const verifyToken = process.env.FB_WEBHOOK_VERIFY_TOKEN;
+
+  if (request.method === 'GET') {
+    if (!verifyToken) return text('Webhook is not configured', 503);
+
+    const mode = url.searchParams.get('hub.mode');
+    const token = url.searchParams.get('hub.verify_token');
+    const challenge = url.searchParams.get('hub.challenge');
+
+    if (mode === 'subscribe' && token === verifyToken && challenge) {
+      return text(challenge);
+    }
+    return text('Verification token mismatch', 403);
+  }
+
+  if (request.method !== 'POST') {
+    return text('Method Not Allowed', 405);
+  }
+
+  const appSecret = process.env.META_APP_SECRET;
+  if (!appSecret) return text('Webhook is not configured', 503);
+
+  const contentLength = Number(request.headers.get('content-length') || 0);
+  if (contentLength > 1_048_576) return text('Payload too large', 413);
+
+  const rawBody = await request.text();
+  const signature = request.headers.get('x-hub-signature-256');
+  if (!signaturesMatch(rawBody, signature, appSecret)) {
+    return text('Invalid webhook signature', 401);
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return text('Invalid JSON payload', 400);
+  }
+
+  if (payload?.object !== 'page') return text('EVENT_RECEIVED');
+
+  // Payload is authenticated. The current client still uses polling, so we
+  // acknowledge events without logging customer IDs or message content.
+  return text('EVENT_RECEIVED');
+}
+
+export default { fetch: handleRequest };

@@ -53,7 +53,33 @@ function saveReadMap(map) {
   localStorage.setItem('metapost_read_map', JSON.stringify(map));
 }
 
-export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitchTab }) {
+const STATUS_MAP_KEY = 'metapost_status_map';
+const STARRED_MAP_KEY = 'metapost_starred_map';
+
+function getLocalMap(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function saveLocalMap(key, map) {
+  localStorage.setItem(key, JSON.stringify(map));
+}
+
+function applyLocalConversationState(conversation, statusMap, starredMap) {
+  const id = conversation.fb_conversation_id;
+  return {
+    ...conversation,
+    status: statusMap[id] || conversation.status,
+    is_starred: Object.prototype.hasOwnProperty.call(starredMap, id)
+      ? Boolean(starredMap[id])
+      : Boolean(conversation.is_starred)
+  };
+}
+
+export default function CRMInbox({ fbToken, onOpenTokenModal }) {
   const [pages, setPages] = useState(() => JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]'));
   const [visiblePageIds, setVisiblePageIds] = useState(() => {
     try {
@@ -205,7 +231,12 @@ export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitc
 
       // Apply read tracking, new message notification, and persistent labels
       const currentReadMap = getReadMap();
-      combined.forEach(c => {
+      const statusMap = getLocalMap(STATUS_MAP_KEY);
+      const starredMap = getLocalMap(STARRED_MAP_KEY);
+      combined.forEach((rawConversation, index) => {
+        const c = applyLocalConversationState(rawConversation, statusMap, starredMap);
+        combined[index] = c;
+
         // Read tracking
         const readUntil = currentReadMap[c.fb_conversation_id];
         if (readUntil && c.last_message_at) {
@@ -305,7 +336,11 @@ export default function CRMInbox({ fbToken, onOpenTokenModal, activeTab, onSwitc
       if (olderConvs.length > 0) {
         setConversations(prev => {
           const existingIds = new Set(prev.map(c => c.fb_conversation_id));
-          const freshOlder = olderConvs.filter(c => !existingIds.has(c.fb_conversation_id));
+          const statusMap = getLocalMap(STATUS_MAP_KEY);
+          const starredMap = getLocalMap(STARRED_MAP_KEY);
+          const freshOlder = olderConvs
+            .filter(c => !existingIds.has(c.fb_conversation_id))
+            .map(c => applyLocalConversationState(c, statusMap, starredMap));
           const merged = [...prev, ...freshOlder];
           localStorage.setItem('metapost_inbox_cache', JSON.stringify(merged));
           return merged;
@@ -599,9 +634,9 @@ function playChimeSound() {
       setActiveConversation(prev => ({ ...prev, status: newStatus }));
     }
 
-    try {
-      await supabase.from('conversations').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('fb_conversation_id', fbConvId);
-    } catch (e) {}
+    const statusMap = getLocalMap(STATUS_MAP_KEY);
+    statusMap[fbConvId] = newStatus;
+    saveLocalMap(STATUS_MAP_KEY, statusMap);
   };
 
   // 7. Toggle Star
@@ -619,9 +654,9 @@ function playChimeSound() {
       setActiveConversation(prev => ({ ...prev, is_starred: nextStarred }));
     }
 
-    try {
-      await supabase.from('conversations').update({ is_starred: nextStarred }).eq('fb_conversation_id', fbConvId);
-    } catch (e) {}
+    const starredMap = getLocalMap(STARRED_MAP_KEY);
+    starredMap[fbConvId] = nextStarred;
+    saveLocalMap(STARRED_MAP_KEY, starredMap);
   };
 
   // 8. Toggle Unread
@@ -797,56 +832,24 @@ function playChimeSound() {
     // Fast background polling: check conversations every 15s
     const timer = setInterval(() => {
       if (fbToken) {
-        const cachedPages = JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]');
-        if (cachedPages.length > 0) {
-          const currentVisible = JSON.parse(localStorage.getItem('metapost_visible_page_ids') || '[]');
-          const active = currentVisible.length > 0
-            ? cachedPages.filter(p => currentVisible.includes(p.id))
-            : cachedPages;
-          loadAllConversations(active, true);
+        try {
+          const cachedPages = JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]');
+          if (cachedPages.length > 0) {
+            const currentVisible = JSON.parse(localStorage.getItem('metapost_visible_page_ids') || '[]');
+            const active = currentVisible.length > 0
+              ? cachedPages.filter(p => currentVisible.includes(p.id))
+              : cachedPages;
+            loadAllConversations(active, true);
+          }
+        } catch {
+          localStorage.removeItem('metapost_pages_cache');
+          localStorage.removeItem('metapost_visible_page_ids');
         }
       }
     }, 15000);
 
     return () => clearInterval(timer);
-  }, []);
-
-  // Real-time Active Conversation Silent Sync (Every 5s)
-  useEffect(() => {
-    if (!activeConversation?.fb_conversation_id || !fbToken) return;
-
-    const activeTimer = setInterval(async () => {
-      try {
-        const msgs = await fetchConversationMessages(
-          activeConversation.fb_conversation_id,
-          activeConversation.page_token || fbToken
-        );
-        if (Array.isArray(msgs) && msgs.length > 0) {
-          setMessages(prev => {
-            if (msgs.length > prev.length) {
-              const lastMsg = msgs[msgs.length - 1];
-              if (lastMsg.from?.id !== activeConversation.page_id) {
-                triggerNewMessageNotification({
-                  pageId: activeConversation.page_id,
-                  pageName: activeConversation.page_name,
-                  convId: activeConversation.fb_conversation_id,
-                  customerName: activeConversation.customer_name,
-                  messageText: lastMsg.message,
-                  avatarUrl: activeConversation.avatar_url,
-                  playSound: true
-                });
-              }
-              localStorage.setItem(`metapost_msgs_${activeConversation.fb_conversation_id}`, JSON.stringify(msgs));
-              return msgs;
-            }
-            return prev;
-          });
-        }
-      } catch {}
-    }, 5000);
-
-    return () => clearInterval(activeTimer);
-  }, [activeConversation?.fb_conversation_id, activeConversation?.page_token, fbToken]);
+  }, [fbToken]);
 
   return (
     <div className="flex-1 flex overflow-hidden h-full h-[calc(100dvh-60px)] relative">
@@ -906,8 +909,6 @@ function playChimeSound() {
           onLoadMore={handleLoadMoreConversations}
           isLoadingMore={isLoadingMore}
           hasMore={hasMoreOlder}
-          activeTab={activeTab}
-          onSwitchTab={onSwitchTab}
         />
       </div>
 

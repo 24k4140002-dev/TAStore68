@@ -289,22 +289,15 @@ export default function App() {
           <CRMInbox
             fbToken={fbToken}
             onOpenTokenModal={() => setIsTokenModalOpen(true)}
-            activeTab={activeTab}
-            onSwitchTab={setActiveTab}
           />
         ) : activeTab === 'post' ? (
           <PostStudio
             fbToken={fbToken}
-            onOpenTokenModal={() => setIsTokenModalOpen(true)}
-            activeTab={activeTab}
-            onSwitchTab={setActiveTab}
           />
         ) : (
           <AdsStudio
             fbToken={fbToken}
             onOpenTokenModal={() => setIsTokenModalOpen(true)}
-            activeTab={activeTab}
-            onSwitchTab={setActiveTab}
           />
         )}
 

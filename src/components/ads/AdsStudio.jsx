@@ -57,7 +57,7 @@ function formatNumber(val) {
   return new Intl.NumberFormat('vi-VN').format(val);
 }
 
-export default function AdsStudio({ fbToken, onOpenTokenModal, activeTab, onSwitchTab }) {
+export default function AdsStudio({ fbToken, onOpenTokenModal }) {
   const [adAccounts, setAdAccounts] = useState([]);
   const [selectedAccountId, setSelectedAccountId] = useState(() => localStorage.getItem('metapost_selected_ad_acc') || '');
   const [datePreset, setDatePreset] = useState('today');

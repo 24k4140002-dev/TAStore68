@@ -1,20 +1,17 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Key, ShieldCheck, Check, Sparkles, Zap, AlertCircle, CheckCircle2, QrCode, Smartphone, Copy } from 'lucide-react';
 import { exchangePermanentToken, fetchPages, cleanFacebookToken } from '../../services/facebookApi';
 
 export default function TokenModal({ currentToken, onClose, onSave }) {
   const [tab, setTab] = useState('direct'); // 'direct' | 'upgrade' | 'mobile_qr'
   const [tokenInput, setTokenInput] = useState(currentToken || '');
-  
-  // App ID & Secret state
-  const [appId, setAppId] = useState(() => localStorage.getItem('metapost_app_id') || '');
-  const [appSecret, setAppSecret] = useState(() => localStorage.getItem('metapost_app_secret') || '');
   const [shortToken, setShortToken] = useState('');
-  
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [isCopiedLink, setIsCopiedLink] = useState(false);
+  const [mobileQrDataUrl, setMobileQrDataUrl] = useState('');
+  const [mobileQrError, setMobileQrError] = useState('');
 
   // Generate Mobile Quick Sync URL
   const getMobileSyncUrl = () => {
@@ -25,6 +22,42 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
   };
 
   const mobileSyncUrl = getMobileSyncUrl();
+
+  // Remove legacy browser-stored app credentials from older releases.
+  useEffect(() => {
+    localStorage.removeItem('metapost_app_id');
+    localStorage.removeItem('metapost_app_secret');
+  }, []);
+
+  // Generate the QR entirely on-device. The Facebook token is never sent to a
+  // third-party QR service.
+  useEffect(() => {
+    let cancelled = false;
+    setMobileQrDataUrl('');
+    setMobileQrError('');
+
+    if (tab !== 'mobile_qr' || !mobileSyncUrl) return () => {
+      cancelled = true;
+    };
+
+    import('qrcode')
+      .then(({ default: QRCode }) => QRCode.toDataURL(mobileSyncUrl, {
+        width: 440,
+        margin: 2,
+        errorCorrectionLevel: 'M',
+        color: { dark: '#0f172a', light: '#ffffff' }
+      }))
+      .then((dataUrl) => {
+        if (!cancelled) setMobileQrDataUrl(dataUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setMobileQrError('Không thể tạo mã QR trên thiết bị này.');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mobileSyncUrl, tab]);
 
   const handleCopySyncLink = () => {
     if (!mobileSyncUrl) return;
@@ -57,7 +90,7 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
       }, 700);
     } catch (err) {
       if (err.message?.includes('190') || err.message?.includes('expired') || err.message?.includes('Session')) {
-        setErrorMessage('⚠️ Token của bạn đã HẾT HẠN (Facebook Error #190: Session Expired). Vui lòng lấy Token mới từ Graph API Explorer hoặc dùng Tab "Đổi Token Vĩnh Viễn".');
+        setErrorMessage('⚠️ Token của bạn đã hết hạn (Facebook Error #190). Vui lòng lấy Token mới từ Graph API Explorer hoặc dùng tab Token Dài Hạn.');
       } else {
         setErrorMessage(`Lỗi xác thực Facebook: ${err.message}`);
       }
@@ -80,15 +113,15 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
     setIsLoading(true);
     try {
       // Exchange token securely via Vercel Serverless Function /api/meta/exchange-token
-      const permanentToken = await exchangePermanentToken(cleanShort, appId, appSecret);
-      const pages = await fetchPages(permanentToken);
+      const longLivedToken = await exchangePermanentToken(cleanShort);
+      const pages = await fetchPages(longLivedToken);
       if (!pages || pages.length === 0) {
         setErrorMessage('Token đổi thành công nhưng không tìm thấy Fanpage nào.');
         return;
       }
-      setSuccessMessage(`🎉 Nâng cấp vĩnh viễn thành công! Đã kết nối ${pages.length} Fanpage.`);
+      setSuccessMessage(`🎉 Đổi token dài hạn thành công! Đã kết nối ${pages.length} Fanpage.`);
       setTimeout(() => {
-        onSave(permanentToken, pages);
+        onSave(longLivedToken, pages);
         onClose();
       }, 700);
     } catch (err) {
@@ -145,7 +178,7 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
               }`}
             >
               <Zap className="w-3.5 h-3.5 text-amber-500" />
-              <span>Đổi Vĩnh Viễn</span>
+              <span>Token Dài Hạn</span>
             </button>
             <button
               type="button"
@@ -197,7 +230,7 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
 
               <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60 flex items-start gap-2 text-slate-600 dark:text-slate-400 text-xs">
                 <ShieldCheck className="w-4 h-4 flex-shrink-0 mt-0.5 text-emerald-500" />
-                <span>Token được lưu an toàn trực tiếp trên trình duyệt của bạn (LocalStorage).</span>
+                <span>Token chỉ được lưu trên trình duyệt này. Không dùng ứng dụng trên máy lạ hoặc máy dùng chung.</span>
               </div>
 
               <div className="flex items-center justify-end gap-2.5 pt-2">
@@ -229,7 +262,7 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
             </form>
           )}
 
-          {/* Tab 2: Permanent Token Generator (Serverless Backend Exchange) */}
+          {/* Tab 2: Long-lived Token Generator (Serverless Backend Exchange) */}
           {tab === 'upgrade' && (
             <form onSubmit={handleUpgradePermanent} className="p-6 space-y-4">
               <div>
@@ -245,38 +278,10 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
                   className="w-full p-3 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white focus:ring-2 focus:ring-brand-500 focus:outline-none transition-smooth resize-none break-all"
                 ></textarea>
                 <p className="text-[11px] text-slate-400 mt-1">
-                  Hệ thống tự động kết nối qua Vercel Serverless để đổi sang <strong>Token Vĩnh Viễn</strong> không bao giờ hết hạn.
+                  Hệ thống đổi sang token dài hạn qua máy chủ. User token thường có thời hạn;
+                  quyền Page còn phụ thuộc trạng thái tài khoản và ứng dụng Meta.
                 </p>
               </div>
-
-              {/* Optional Custom App Secret Toggle */}
-              <details className="text-xs group">
-                <summary className="cursor-pointer font-bold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 select-none">
-                  ⚙️ Cấu hình App ID / Secret riêng (Tuỳ chọn khi chạy localhost)
-                </summary>
-                <div className="mt-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700/60 space-y-2.5 animate-in fade-in">
-                  <div>
-                    <label className="block font-medium text-slate-600 dark:text-slate-400 mb-1">Custom App ID</label>
-                    <input
-                      type="text"
-                      placeholder="123456789..."
-                      value={appId}
-                      onChange={(e) => setAppId(e.target.value)}
-                      className="w-full p-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-medium text-slate-600 dark:text-slate-400 mb-1">Custom App Secret</label>
-                    <input
-                      type="password"
-                      placeholder="App Secret..."
-                      value={appSecret}
-                      onChange={(e) => setAppSecret(e.target.value)}
-                      className="w-full p-2 text-xs font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
-                    />
-                  </div>
-                </div>
-              </details>
 
               {errorMessage && (
                 <div className="p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 flex items-start gap-2 text-red-700 dark:text-red-300 text-xs">
@@ -313,7 +318,7 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
                   ) : (
                     <>
                       <Zap className="w-4 h-4" />
-                      <span>Nâng Cấp & Kích Hoạt Vĩnh Viễn</span>
+                      <span>Đổi & Kích Hoạt Token Dài Hạn</span>
                     </>
                   )}
                 </button>
@@ -332,15 +337,26 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
                 Mở ứng dụng <strong>Camera</strong> hoặc <strong>Zalo</strong> trên điện thoại, hướng vào mã QR bên dưới để tự động đăng nhập!
               </p>
 
+              <div className="w-full p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-left text-[11px] text-amber-800 dark:text-amber-200">
+                Mã QR này chứa quyền truy cập Facebook. Chỉ quét trên thiết bị cá nhân,
+                không chụp màn hình hoặc gửi cho người khác.
+              </div>
+
               {mobileSyncUrl ? (
                 <div className="p-4 bg-white rounded-2xl shadow-lg border border-slate-200 flex flex-col items-center">
-                  <img
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(mobileSyncUrl)}`}
-                    alt="Scan to login on mobile"
-                    className="w-48 h-48 rounded-xl object-contain"
-                  />
+                  {mobileQrDataUrl ? (
+                    <img
+                      src={mobileQrDataUrl}
+                      alt="Mã QR đồng bộ token sang thiết bị cá nhân"
+                      className="w-48 h-48 rounded-xl object-contain"
+                    />
+                  ) : (
+                    <div className="w-48 h-48 rounded-xl bg-slate-100 flex items-center justify-center text-xs text-slate-500">
+                      {mobileQrError || 'Đang tạo mã QR trên thiết bị...'}
+                    </div>
+                  )}
                   <span className="text-[11px] text-slate-400 font-medium mt-2">
-                    Quét mã để kích hoạt 14 Fanpage trên Mobile
+                    Quét mã để kích hoạt Fanpage trên Mobile
                   </span>
                 </div>
               ) : (

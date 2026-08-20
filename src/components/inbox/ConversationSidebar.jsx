@@ -12,13 +12,10 @@ import {
   SlidersHorizontal,
   ChevronDown,
   Key,
-  Edit3,
-  Bell,
-  BellRing
+  Edit3
 } from 'lucide-react';
 import { getInitials, getAvatarColor, formatTimeAgo, getPageDisplayName } from '../../services/facebookApi';
 import CustomerAvatar from '../common/CustomerAvatar';
-import { requestNotificationPermission, triggerNewMessageNotification } from '../../services/notificationService';
 
 // ⚡ Memoized Conversation Card for 60/120fps smooth scrolling
 const ConversationCard = memo(function ConversationCard({
@@ -121,9 +118,7 @@ export default function ConversationSidebar({
   onOpenTokenModal,
   onLoadMore,
   isLoadingMore,
-  hasMore = true,
-  activeTab,
-  onSwitchTab
+  hasMore = true
 }) {
   const [showFilters, setShowFilters] = useState(false);
   const [pageNicknames, setPageNicknames] = useState(() => {
@@ -133,26 +128,6 @@ export default function ConversationSidebar({
       return {};
     }
   });
-
-  const [notifGranted, setNotifGranted] = useState(() => {
-    try {
-      return typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted';
-    } catch {
-      return false;
-    }
-  });
-
-  const handleToggleSoundAndNotification = async () => {
-    const perm = await requestNotificationPermission();
-    setNotifGranted(perm === 'granted');
-    await triggerNewMessageNotification({
-      pageId: 'all',
-      pageName: 'TAStore68 Pro',
-      customerName: 'Hệ Thống Thông Báo',
-      messageText: '🔔 Chuông báo Ting Ting và thông báo màn hình khóa đã sẵn sàng!',
-      playSound: true
-    });
-  };
 
   const handleEditNickname = () => {
     if (selectedPageId === 'all') return;
@@ -216,61 +191,6 @@ export default function ConversationSidebar({
     <aside className="w-full h-full flex flex-col border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
       {/* Compact Header — Only Page Selector & Action Icons */}
       <div className="p-2 sm:p-2.5 border-b border-slate-100 dark:border-slate-800 flex-shrink-0 bg-white dark:bg-slate-900 z-10 space-y-1.5">
-        {/* Mobile-Only Top Navigation Strip */}
-        <div className="flex md:hidden items-center justify-between gap-1.5 pb-1 border-b border-slate-100 dark:border-slate-800">
-          <div className="flex items-center gap-1.5">
-            <span className="font-extrabold text-xs text-brand-600 dark:text-brand-400">TAStore68</span>
-            <span className="px-1.5 py-0.2 rounded bg-brand-50 dark:bg-brand-950 text-[10px] font-black text-brand-600 border border-brand-200/50">PRO</span>
-          </div>
-
-          <div className="flex items-center gap-1">
-            {/* Clean Mobile Bell Icon */}
-            <button
-              type="button"
-              onClick={handleToggleSoundAndNotification}
-              className={`p-1.5 rounded-lg border transition-smooth ${
-                notifGranted
-                  ? 'bg-blue-50 dark:bg-blue-950/60 border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700'
-              }`}
-              title={notifGranted ? 'Chuông & Thông báo đang bật' : 'Bật chuông & thông báo'}
-            >
-              {notifGranted ? <BellRing className="w-3.5 h-3.5 text-blue-500" /> : <Bell className="w-3.5 h-3.5 text-slate-500" />}
-            </button>
-
-            {onSwitchTab && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => onSwitchTab('post')}
-                  className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-200 flex items-center gap-1"
-                  title="Chuyển sang Đăng Bài Đa Page"
-                >
-                  <span>📝 Bài</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onSwitchTab('ads')}
-                  className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-purple-600 dark:text-purple-400 hover:bg-slate-200 flex items-center gap-1"
-                  title="Chuyển sang Báo Cáo Ads"
-                >
-                  <span>📊 Ads</span>
-                </button>
-              </>
-            )}
-            {onOpenTokenModal && (
-              <button
-                type="button"
-                onClick={onOpenTokenModal}
-                className="p-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-amber-500 hover:bg-slate-200"
-                title="Quản lý Token"
-              >
-                <Key className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
-        </div>
-
         <div className="flex items-center justify-between gap-1.5">
           {/* Page Dropdown */}
           <div className="relative flex-1 min-w-0">

@@ -1,57 +1,107 @@
-﻿export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
-  );
+const JSON_HEADERS = {
+  'Cache-Control': 'no-store, max-age=0',
+  'Content-Type': 'application/json; charset=utf-8',
+  'X-Content-Type-Options': 'nosniff'
+};
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+function json(data, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...JSON_HEADERS, ...extraHeaders }
+  });
+}
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed. Use POST.' });
-  }
+function getGraphVersion() {
+  const configured = String(process.env.META_GRAPH_VERSION || 'v26.0').trim();
+  return /^v\d+\.\d+$/.test(configured) ? configured : 'v26.0';
+}
+
+function isCrossOrigin(request) {
+  const origin = request.headers.get('origin');
+  if (!origin) return false;
 
   try {
-    const { shortToken, appId: customAppId, appSecret: customAppSecret } = req.body || {};
-    const cleanShort = (shortToken || '').trim();
+    return new URL(origin).origin !== new URL(request.url).origin;
+  } catch {
+    return true;
+  }
+}
 
-    if (!cleanShort) {
-      return res.status(400).json({ error: 'Vui lòng cung cấp User Token ngắn hạn.' });
+async function handleRequest(request) {
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Allow': 'POST, OPTIONS',
+        'Cache-Control': 'no-store, max-age=0'
+      }
+    });
+  }
+
+  if (request.method !== 'POST') {
+    return json({ error: 'Method Not Allowed. Use POST.' }, 405, { Allow: 'POST, OPTIONS' });
+  }
+
+  if (isCrossOrigin(request)) {
+    return json({ error: 'Cross-origin request is not allowed.' }, 403);
+  }
+
+  const contentLength = Number(request.headers.get('content-length') || 0);
+  if (contentLength > 16_384) {
+    return json({ error: 'Request body is too large.' }, 413);
+  }
+
+  const appId = process.env.META_APP_ID;
+  const appSecret = process.env.META_APP_SECRET;
+  if (!appId || !appSecret) {
+    return json({
+      error: 'Máy chủ chưa cấu hình META_APP_ID và META_APP_SECRET.'
+    }, 503);
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: 'Dữ liệu JSON không hợp lệ.' }, 400);
+  }
+
+  const shortToken = typeof body?.shortToken === 'string' ? body.shortToken.trim() : '';
+  if (!shortToken || shortToken.length > 4096) {
+    return json({ error: 'Vui lòng cung cấp User Token ngắn hạn hợp lệ.' }, 400);
+  }
+
+  const exchangeUrl = new URL(`https://graph.facebook.com/${getGraphVersion()}/oauth/access_token`);
+  exchangeUrl.searchParams.set('grant_type', 'fb_exchange_token');
+  exchangeUrl.searchParams.set('client_id', appId);
+  exchangeUrl.searchParams.set('client_secret', appSecret);
+  exchangeUrl.searchParams.set('fb_exchange_token', shortToken);
+
+  try {
+    const response = await fetch(exchangeUrl, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(15_000)
+    });
+    const data = await response.json().catch(() => null);
+
+    if (!response.ok || !data?.access_token) {
+      const publicMessage = response.status === 429
+        ? 'Meta đang giới hạn yêu cầu. Vui lòng thử lại sau.'
+        : (data?.error?.message || 'Không thể đổi Token với Meta Graph API.');
+      return json({ error: publicMessage }, response.status >= 400 ? response.status : 400);
     }
 
-    // Read App ID & Secret from server environment variables, or fallback to request body
-    const appId = process.env.META_APP_ID || customAppId;
-    const appSecret = process.env.META_APP_SECRET || customAppSecret;
-    const version = process.env.META_GRAPH_VERSION || 'v19.0';
-
-    if (!appId || !appSecret) {
-      return res.status(400).json({
-        error: 'Chưa cấu hình META_APP_ID hoặc META_APP_SECRET trên máy chủ Vercel. Vui lòng thêm biến môi trường trong Vercel Project Settings.'
-      });
-    }
-
-    const exchangeUrl = https://graph.facebook.com/\/oauth/access_token?grant_type=fb_exchange_token&client_id=\&client_secret=\&fb_exchange_token=\;
-
-    const response = await fetch(exchangeUrl);
-    const data = await response.json();
-
-    if (!response.ok || data.error) {
-      return res.status(response.status || 400).json({
-        error: data?.error?.message || 'Không thể đổi Token với Meta Graph API.',
-        meta_error: data?.error
-      });
-    }
-
-    return res.status(200).json({
+    return json({
       access_token: data.access_token,
       token_type: data.token_type,
       expires_in: data.expires_in
     });
-  } catch (err) {
-    return res.status(500).json({ error: 'Lỗi máy chủ: ' + err.message });
+  } catch (error) {
+    const message = error?.name === 'TimeoutError'
+      ? 'Meta Graph API phản hồi quá chậm. Vui lòng thử lại.'
+      : 'Không thể kết nối Meta Graph API.';
+    return json({ error: message }, 502);
   }
 }
+
+export default { fetch: handleRequest };
