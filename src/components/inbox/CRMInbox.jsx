@@ -148,6 +148,8 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
   const [isAutoRulesOpen, setIsAutoRulesOpen] = useState(false);
   const [isPageManagerOpen, setIsPageManagerOpen] = useState(false);
   const knownMessagesMapRef = useRef({});
+  const activeConversationRef = useRef(activeConversation);
+  activeConversationRef.current = activeConversation;
 
   // 1. Load Meta & Page Labels (from localStorage & defaults)
   const loadLabelsAndTags = () => {
@@ -257,6 +259,16 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
             avatarUrl: c.avatar_url,
             playSound: true
           });
+
+          // If this is the currently open conversation, automatically update message bubbles
+          if (activeConversationRef.current?.fb_conversation_id === c.fb_conversation_id) {
+            fetchConversationMessages(c.fb_conversation_id, c.page_token || fbToken).then(freshMsgs => {
+              if (Array.isArray(freshMsgs) && freshMsgs.length > 0) {
+                setMessages(freshMsgs);
+                localStorage.setItem(`metapost_msgs_${c.fb_conversation_id}`, JSON.stringify(freshMsgs));
+              }
+            }).catch(() => {});
+          }
         }
         knownMessagesMapRef.current[c.fb_conversation_id] = c.snippet;
 
