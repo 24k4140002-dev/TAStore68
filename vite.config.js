@@ -1,7 +1,11 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import fs from 'fs';
+
+const realCwd = fs.existsSync(process.cwd()) ? fs.realpathSync(process.cwd()) : process.cwd();
 
 export default defineConfig({
+  root: realCwd,
   plugins: [react()],
   server: {
     port: 3000,
