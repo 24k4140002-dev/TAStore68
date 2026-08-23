@@ -8,9 +8,13 @@ import OrderCreateModal from './OrderCreateModal';
 import LabelsManagerModal from './LabelsManagerModal';
 import QuickRepliesModal from './QuickRepliesModal';
 import VietQRModal from './VietQRModal';
-import AutoRulesModal from './AutoRulesModal';
 import PageManagerModal from './PageManagerModal';
 import { triggerNewMessageNotification } from '../../services/notificationService';
+import {
+  confirmOptimisticMessage,
+  createOptimisticMessage,
+  removeOptimisticMessage
+} from '../../services/messageState';
 import {
   fetchPages,
   fetchPageConversations,
@@ -145,7 +149,6 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
   const [isLabelsManagerOpen, setIsLabelsManagerOpen] = useState(false);
   const [isQuickRepliesOpen, setIsQuickRepliesOpen] = useState(false);
   const [isVietQROpen, setIsVietQROpen] = useState(false);
-  const [isAutoRulesOpen, setIsAutoRulesOpen] = useState(false);
   const [isPageManagerOpen, setIsPageManagerOpen] = useState(false);
   const knownMessagesMapRef = useRef({});
   const activeConversationRef = useRef(activeConversation);
@@ -260,15 +263,9 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
             playSound: true
           });
 
-          // If this is the currently open conversation, automatically update message bubbles
-          if (activeConversationRef.current?.fb_conversation_id === c.fb_conversation_id) {
-            fetchConversationMessages(c.fb_conversation_id, c.page_token || fbToken).then(freshMsgs => {
-              if (Array.isArray(freshMsgs) && freshMsgs.length > 0) {
-                setMessages(freshMsgs);
-                localStorage.setItem(`metapost_msgs_${c.fb_conversation_id}`, JSON.stringify(freshMsgs));
-              }
-            }).catch(() => {});
-          }
+          // The active-thread poller owns message refreshes. Avoid a duplicate
+          // Graph request here when the 15-second conversation scan sees the
+          // same new snippet.
         }
         knownMessagesMapRef.current[c.fb_conversation_id] = c.snippet;
 
@@ -497,10 +494,12 @@ function playChimeSound() {
         setCustomerCRMData({
           phone: savedCust.phone || '',
           email: savedCust.email || '',
+          address: savedCust.address || '',
+          lead_stage: savedCust.lead_stage || 'potential',
           notes: savedNotes
         });
       } else {
-        setCustomerCRMData({ phone: '', email: '', notes: [] });
+        setCustomerCRMData({ phone: '', email: '', address: '', lead_stage: 'potential', notes: [] });
       }
     } catch (err) {
       console.error('Load messages error:', err);
@@ -551,8 +550,11 @@ function playChimeSound() {
     const avatarUrl = activeConversation.avatar_url;
     const token = activeConversation.page_token || fbToken;
 
-    const pollTimer = setInterval(async () => {
+    let isSyncing = false;
+    const syncActiveThread = async () => {
       if (document.hidden) return;
+      if (isSyncing) return;
+      isSyncing = true;
       try {
         const latestMsgs = await fetchConversationMessages(convId, token, null, 100);
         if (latestMsgs && latestMsgs.length > 0) {
@@ -580,10 +582,25 @@ function playChimeSound() {
             return prev;
           });
         }
-      } catch (e) {}
-    }, 3500);
+      } catch (e) {
+        // A later poll or focus event retries without interrupting the chat UI.
+      } finally {
+        isSyncing = false;
+      }
+    };
 
-    return () => clearInterval(pollTimer);
+    const handleVisibilitySync = () => {
+      if (!document.hidden) syncActiveThread();
+    };
+    const pollTimer = setInterval(syncActiveThread, 3500);
+    window.addEventListener('focus', syncActiveThread);
+    document.addEventListener('visibilitychange', handleVisibilitySync);
+
+    return () => {
+      clearInterval(pollTimer);
+      window.removeEventListener('focus', syncActiveThread);
+      document.removeEventListener('visibilitychange', handleVisibilitySync);
+    };
   }, [
     activeConversation?.fb_conversation_id,
     activeConversation?.page_id,
@@ -596,39 +613,93 @@ function playChimeSound() {
 
   // 6. Send Message Handler with Optimistic UI
   const handleSendMessage = async ({ text, file, mode }) => {
-    if (!activeConversation) return;
-    const token = activeConversation.page_token || fbToken;
+    const conversationAtSend = activeConversationRef.current;
+    if (!conversationAtSend) return;
+    const token = conversationAtSend.page_token || fbToken;
+    const conversationId = conversationAtSend.fb_conversation_id;
+    const cleanText = text?.trim() || '';
+    const tempId = cleanText ? `temp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}` : '';
 
-    // ⚡ Optimistic UI: Display message instantly
-    if (text) {
-      const tempId = 'temp_' + Date.now();
-      const optimisticMsg = {
+    if (tempId) {
+      const optimisticMsg = createOptimisticMessage({
         id: tempId,
-        message: text,
-        created_time: new Date().toISOString(),
-        from: { id: activeConversation.page_id, name: activeConversation.page_name },
-        sending: true
-      };
-      setMessages(prev => [...prev, optimisticMsg]);
+        text: cleanText,
+        createdAt: new Date().toISOString(),
+        pageId: conversationAtSend.page_id,
+        pageName: conversationAtSend.page_name
+      });
+      setMessages(prev => {
+        const next = [...prev, optimisticMsg];
+        localStorage.setItem(`metapost_msgs_${conversationId}`, JSON.stringify(next));
+        return next;
+      });
     }
 
     try {
-      if (mode === 'messenger' && activeConversation.customer_psid) {
-        await sendMessengerMessage(activeConversation.customer_psid, text, token, file);
-      } else if (mode === 'public_comment' && activeConversation.id) {
-        await sendCommentReply(activeConversation.id, text, token);
-      } else if (mode === 'private_reply' && activeConversation.id) {
-        await sendPrivateReply(activeConversation.id, text, token);
+      let response;
+      if (mode === 'messenger' && conversationAtSend.customer_psid) {
+        response = await sendMessengerMessage(conversationAtSend.customer_psid, cleanText, token, file);
+      } else if (mode === 'public_comment' && conversationAtSend.id) {
+        response = await sendCommentReply(conversationAtSend.id, cleanText, token);
+      } else if (mode === 'private_reply' && conversationAtSend.id) {
+        response = await sendPrivateReply(conversationAtSend.id, cleanText, token);
       }
 
-      // Refresh messages
-      const msgs = await fetchConversationMessages(activeConversation.fb_conversation_id, token);
-      setMessages(msgs);
-      sessionStorage.setItem(`metapost_msgs_${activeConversation.fb_conversation_id}`, JSON.stringify(msgs));
+      if (tempId) {
+        let cachedMessages = [];
+        try {
+          cachedMessages = JSON.parse(localStorage.getItem(`metapost_msgs_${conversationId}`) || '[]');
+        } catch {}
+        const confirmedCache = confirmOptimisticMessage(cachedMessages, tempId, response);
+        localStorage.setItem(`metapost_msgs_${conversationId}`, JSON.stringify(confirmedCache));
+        sessionStorage.setItem(`metapost_msgs_${conversationId}`, JSON.stringify(confirmedCache));
+
+        if (activeConversationRef.current?.fb_conversation_id === conversationId) {
+          setMessages(prev => confirmOptimisticMessage(prev, tempId, response));
+        }
+      }
+
+      const sentAt = new Date().toISOString();
+      const snippet = cleanText || (file ? '📎 Đã gửi tệp đính kèm' : 'Đã gửi phản hồi');
+      setConversations(prev => prev.map(conversation =>
+        conversation.fb_conversation_id === conversationId
+          ? { ...conversation, snippet, last_message_at: sentAt }
+          : conversation
+      ));
+      setActiveConversation(prev => prev?.fb_conversation_id === conversationId
+        ? { ...prev, snippet, last_message_at: sentAt }
+        : prev
+      );
+
+      // Attachments need Meta's normalized attachment payload. Refresh them in
+      // the background, outside the send button's critical path.
+      if (file) {
+        fetchConversationMessages(conversationId, token, null, 100).then(freshMessages => {
+          if (!Array.isArray(freshMessages) || freshMessages.length === 0) return;
+          localStorage.setItem(`metapost_msgs_${conversationId}`, JSON.stringify(freshMessages));
+          sessionStorage.setItem(`metapost_msgs_${conversationId}`, JSON.stringify(freshMessages));
+          if (activeConversationRef.current?.fb_conversation_id === conversationId) {
+            setMessages(freshMessages);
+          }
+        }).catch(() => {});
+      }
+
+      return response;
     } catch (err) {
       console.error('Send error:', err);
-      // Remove temp message if failed
-      setMessages(prev => prev.filter(m => !m.id.startsWith('temp_')));
+      if (tempId) {
+        let cachedMessages = [];
+        try {
+          cachedMessages = JSON.parse(localStorage.getItem(`metapost_msgs_${conversationId}`) || '[]');
+        } catch {}
+        localStorage.setItem(
+          `metapost_msgs_${conversationId}`,
+          JSON.stringify(removeOptimisticMessage(cachedMessages, tempId))
+        );
+        if (activeConversationRef.current?.fb_conversation_id === conversationId) {
+          setMessages(prev => removeOptimisticMessage(prev, tempId));
+        }
+      }
       throw err;
     }
   };
@@ -777,6 +848,17 @@ function playChimeSound() {
     if (activeConversation?.customer_psid) {
       localStorage.setItem(`orders_${activeConversation.customer_psid}`, JSON.stringify(updated));
     }
+  };
+
+  const handleUpdateLeadStage = (leadStage) => {
+    if (!activeConversation?.customer_psid) return;
+    const storageKey = `metapost_cust_${activeConversation.customer_psid}`;
+    let savedCustomer = {};
+    try {
+      savedCustomer = JSON.parse(localStorage.getItem(storageKey) || '{}');
+    } catch {}
+    localStorage.setItem(storageKey, JSON.stringify({ ...savedCustomer, lead_stage: leadStage }));
+    setCustomerCRMData(prev => ({ ...prev, lead_stage: leadStage }));
   };
 
   // Scan unread across ALL pages (independent of selected page)
@@ -943,7 +1025,6 @@ function playChimeSound() {
           quickReplies={quickReplies}
           onOpenQuickRepliesModal={() => setIsQuickRepliesOpen(true)}
           onOpenVietQRModal={() => setIsVietQROpen(true)}
-          onOpenAutoRulesModal={() => setIsAutoRulesOpen(true)}
           onLoadOlderMessages={handleLoadOlderMessages}
           hasMoreOlderMessages={hasMoreMessages}
           isLoadingOlderMessages={isLoadingOlderMessages}
@@ -976,6 +1057,7 @@ function playChimeSound() {
             onRemoveLabel={handleRemoveLabel}
             onAddNote={handleAddNote}
             onDeleteNote={handleDeleteNote}
+            onUpdateLeadStage={handleUpdateLeadStage}
             onOpenCreateOrder={() => setIsOrderModalOpen(true)}
             onOpenMediaModal={setActiveMediaModal}
             onOpenLabelsManager={() => setIsLabelsManagerOpen(true)}
@@ -1039,13 +1121,6 @@ function playChimeSound() {
             if (!activeConversation) return;
             await handleSendMessage({ text, file, mode: 'messenger' });
           }}
-        />
-      )}
-
-      {isAutoRulesOpen && (
-        <AutoRulesModal
-          isOpen={isAutoRulesOpen}
-          onClose={() => setIsAutoRulesOpen(false)}
         />
       )}
 

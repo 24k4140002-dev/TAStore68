@@ -419,7 +419,7 @@ export default function ConversationSidebar({
       </div>
 
       {/* Footer stats */}
-      <div className="p-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs sm:text-[13px] text-slate-500 font-semibold bg-slate-50/50 dark:bg-slate-800/30 gap-2">
+      <div className="px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs sm:text-[13px] text-slate-500 font-semibold bg-slate-50/50 dark:bg-slate-800/30 gap-2">
         <span>Tổng: {conversations.length}</span>
         {unreadTotal > 0 ? (
           <button

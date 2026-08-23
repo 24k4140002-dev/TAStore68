@@ -1,4 +1,4 @@
-# TAStore68 Pro (v3.6.1) 🚀 — Hệ Thống Đăng Bài & CRM Fanpage Facebook Đa Kênh
+# TAStore68 Pro (v3.7.0) 🚀 — Hệ Thống Đăng Bài & CRM Fanpage Facebook Đa Kênh
 
 **TAStore68 Pro** là hệ sinh thái Web App chuyên nghiệp kết hợp giữa **Quản Lý Hội Thoại CRM Inbox Đa Page** và **Studio Đăng Bài Đa Phương Tiện (Ảnh/Album/Video)** đồng thời lên hàng loạt Fanpage Facebook.
 
@@ -9,10 +9,12 @@
 ### 💬 1. CRM Inbox — Quản Lý Hội Thoại & Khách Hàng Đa Page
 - **Quản lý đa Fanpage tập trung:** Chuyển đổi linh hoạt giữa 14+ Fanpage hoặc xem chế độ "Tất cả Page".
 - **Giao diện Chat Messenger hiện đại:** Hỗ trợ tin nhắn văn bản, ảnh, âm thanh, sticker và tệp đính kèm.
+- **Gửi tin phản hồi nhanh:** Tin được hiển thị tức thì và xác nhận bằng `message_id` từ Meta, không chờ thêm một lượt tải lại lịch sử.
 - **Phân biệt Page trùng tên thông minh:** Tự động hiển thị lượt Like thực tế (`1.062 Like`, `1.478 Follower`) hoặc đặt Nickname riêng cho từng trang.
 - **Mẫu trả lời nhanh (Quick Replies):** Phím tắt thông minh `/size`, `/stk`, `/ship`, `/in`, `/camon`.
 - **Tạo mã VietQR tự động:** Điền số tiền & nội dung, tạo mã QR ngân hàng tức thì để gửi khách quét trả tiền.
 - **Tạo đơn hàng & Ghi chú CRM:** Lưu thông tin khách hàng, số điện thoại, ghi chú nội bộ và lịch sử đơn hàng trực tiếp trên thiết bị (Offline-first / LocalStorage).
+- **Phạm vi đồng bộ rõ ràng:** Tin nhắn và nhãn Facebook đồng bộ với Meta; đơn hàng, ghi chú, trạng thái nội bộ và mẫu trả lời hiện chỉ lưu trên thiết bị đang dùng.
 - **Tối ưu Mobile WebKit / Safari:** Hỗ trợ giao diện tràn viền `100dvh`, vuốt chạm cảm ứng mượt mà, chống tự động phóng to (Auto-zoom) trên iPhone.
 
 ### 📢 2. PostStudio Pro — Đăng Bài Đa Phương Tiện Đa Page

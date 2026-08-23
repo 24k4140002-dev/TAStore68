@@ -37,6 +37,7 @@ export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem('metapost_theme') || 'light');
   const [isTokenModalOpen, setIsTokenModalOpen] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(() => localStorage.getItem('metapost_focus_mode') === 'true');
+  const [isOnline, setIsOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
   const [notifPermission, setNotifPermission] = useState(() => {
     try {
       if (typeof window !== 'undefined' && 'Notification' in window && typeof Notification.permission === 'string') {
@@ -65,6 +66,16 @@ export default function App() {
       // Clean query string from browser bar
       window.history.replaceState({}, document.title, window.location.pathname);
     }
+  }, []);
+
+  useEffect(() => {
+    const updateOnlineStatus = () => setIsOnline(navigator.onLine);
+    window.addEventListener('online', updateOnlineStatus);
+    window.addEventListener('offline', updateOnlineStatus);
+    return () => {
+      window.removeEventListener('online', updateOnlineStatus);
+      window.removeEventListener('offline', updateOnlineStatus);
+    };
   }, []);
 
   const handleToggleNotification = async () => {
@@ -208,9 +219,13 @@ export default function App() {
         {/* Right Controls */}
         <div className="flex items-center gap-1.5 sm:gap-2">
           {/* Online status indicator */}
-          <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/60 text-[11px] font-bold">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
-            <span>Đang có mặt</span>
+          <div className={`hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-bold ${
+            isOnline
+              ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border-emerald-200/60 dark:border-emerald-800/60'
+              : 'bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 border-red-200/60 dark:border-red-800/60'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
+            <span>{isOnline ? 'Có kết nối mạng' : 'Mất kết nối mạng'}</span>
           </div>
 
           {/* Notification & Sound Toggle button */}

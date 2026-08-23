@@ -22,8 +22,6 @@ import {
   Info,
   Zap,
   QrCode,
-  Bot,
-  Plus,
   ThumbsUp,
   Share2,
   FileText
@@ -79,7 +77,6 @@ export default function ChatThread({
   quickReplies = DEFAULT_QUICK_REPLIES,
   onOpenQuickRepliesModal,
   onOpenVietQRModal,
-  onOpenAutoRulesModal,
   onLoadOlderMessages,
   hasMoreOlderMessages,
   isLoadingOlderMessages
@@ -527,7 +524,7 @@ export default function ChatThread({
                     {/* Timestamp (Rendered cleanly only on the last message of the group) */}
                     {isGroupEnd && (
                       <div className={`text-[10px] sm:text-[11px] text-slate-400 font-medium px-1 ${isFromPage ? 'text-right' : 'text-left'}`}>
-                        {formatMessageTime(msg.created_time)}
+                        {msg.sending ? 'Đang gửi…' : formatMessageTime(msg.created_time)}
                       </div>
                     )}
                   </div>
@@ -541,7 +538,7 @@ export default function ChatThread({
       </div>
 
       {/* Bottom Reply Area (Sleek Compact iOS-style) */}
-      <div className="p-2 sm:p-3 pb-2 sm:pb-3 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1.5 relative flex-shrink-0">
+      <div className="px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:p-3 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1.5 relative flex-shrink-0">
         {/* Floating '/' Shortcut Dropdown */}
         {shortcutQuery && matchingReplies.length > 0 && (
           <div className="absolute bottom-[calc(100%+8px)] left-3 right-3 bg-white dark:bg-slate-800 border border-brand-300 dark:border-brand-700 rounded-2xl shadow-2xl p-2 z-30 max-h-64 overflow-y-auto space-y-1 animate-in fade-in slide-in-from-bottom-2 duration-150">
@@ -573,7 +570,7 @@ export default function ChatThread({
         )}
 
         {/* Compact Tool Strip & Quick Replies (Combined in 1 sleek line) */}
-        <div className="flex items-center justify-between gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+        <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 touch-scroll-x overscroll-x-contain">
           {/* Quick mode & tools */}
           <div className="flex items-center gap-1 flex-shrink-0">
             <button
@@ -618,13 +615,13 @@ export default function ChatThread({
           </div>
 
           {/* Quick Suggested Reply Chips */}
-          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar touch-scroll-x">
+          <div className="flex min-w-max items-center gap-1 pr-2">
             {quickReplies.slice(0, 5).map((qr) => (
               <button
                 key={qr.id}
                 type="button"
                 onClick={() => handleSelectShortcut(qr)}
-                className="px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium whitespace-nowrap transition-smooth border border-slate-200/60 dark:border-slate-700/60 flex items-center gap-1 flex-shrink-0"
+                className="px-2.5 py-1.5 min-h-8 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium whitespace-nowrap transition-smooth border border-slate-200/60 dark:border-slate-700/60 flex items-center gap-1 flex-shrink-0"
               >
                 <span className="font-mono font-bold text-amber-600 dark:text-amber-400 text-[11px]">{qr.shortcut}</span>
               </button>
@@ -678,7 +675,7 @@ export default function ChatThread({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="p-2 sm:p-2.5 rounded-xl text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-smooth border border-slate-200/80 dark:border-slate-700/80 flex-shrink-0"
+            className="w-11 h-11 rounded-xl text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-smooth border border-slate-200/80 dark:border-slate-700/80 flex-shrink-0 flex items-center justify-center"
             title="Đính kèm ảnh / tệp"
           >
             <Image className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -695,7 +692,7 @@ export default function ChatThread({
                 handleSend();
               }
             }}
-            className="flex-1 px-3.5 py-2 text-[15px] sm:text-[14px] leading-snug rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-smooth resize-none max-h-24"
+            className="flex-1 min-w-0 min-h-11 px-3.5 py-2.5 text-[16px] sm:text-[14px] leading-snug rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-smooth resize-none max-h-24"
           ></textarea>
 
           {/* Send Button or Quick Like 👍 */}
@@ -703,7 +700,7 @@ export default function ChatThread({
             <button
               type="submit"
               disabled={isSending}
-              className="p-2 sm:p-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white shadow-md shadow-brand-500/20 disabled:opacity-50 disabled:shadow-none transition-smooth flex items-center justify-center flex-shrink-0"
+              className="w-11 h-11 rounded-xl bg-brand-500 hover:bg-brand-600 text-white shadow-md shadow-brand-500/20 disabled:opacity-50 disabled:shadow-none transition-smooth flex items-center justify-center flex-shrink-0"
               title="Gửi tin nhắn"
             >
               {isSending ? (
@@ -717,7 +714,7 @@ export default function ChatThread({
               type="button"
               onClick={handleSendLike}
               disabled={isSending}
-              className="p-2 sm:p-2.5 rounded-xl text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-950/40 transition-smooth flex items-center justify-center flex-shrink-0 active:scale-90"
+              className="w-11 h-11 rounded-xl text-brand-500 hover:bg-brand-50 dark:hover:bg-brand-950/40 transition-smooth flex items-center justify-center flex-shrink-0 active:scale-90"
               title="Gửi nút thích 👍"
             >
               <ThumbsUp className="w-5 h-5 fill-current" />

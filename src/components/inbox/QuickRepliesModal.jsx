@@ -85,7 +85,7 @@ export default function QuickRepliesModal({ isOpen, onClose, quickReplies, onSav
             </div>
             <div>
               <h3 className="font-bold text-slate-900 dark:text-white text-base">Quản Lý Tin Nhắn Mẫu & Phím Tắt</h3>
-              <p className="text-xs text-slate-500">Gõ dấu "/" trong ô chat để gọi nhanh tin nhắn mẫu</p>
+              <p className="text-xs text-slate-500">Gõ dấu "/" để gọi nhanh · Mẫu được lưu trên thiết bị này</p>
             </div>
           </div>
           <button

@@ -17,7 +17,8 @@ import {
   ExternalLink,
   ChevronRight,
   X,
-  Grid
+  Grid,
+  CloudOff
 } from 'lucide-react';
 import { getInitials, getAvatarColor, formatDateTime, isSticker } from '../../services/facebookApi';
 import CustomerAvatar from '../common/CustomerAvatar';
@@ -115,6 +116,11 @@ export default function CustomerProfilePanel({
               {conversation.page_name}
             </p>
           </div>
+        </div>
+
+        <div className="flex items-start gap-2 rounded-xl border border-amber-200/80 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-300">
+          <CloudOff className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+          <span>Đơn hàng, ghi chú và giai đoạn khách hiện chỉ lưu trên thiết bị này. Tin nhắn và nhãn Facebook mới được đồng bộ với Meta.</span>
         </div>
 
         {/* Source badge */}
