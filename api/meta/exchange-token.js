@@ -61,7 +61,11 @@ async function handleRequest(request) {
 
   let body;
   try {
-    body = await request.json();
+    const rawBody = await request.text();
+    if (Buffer.byteLength(rawBody, 'utf8') > 16_384) {
+      return json({ error: 'Request body is too large.' }, 413);
+    }
+    body = JSON.parse(rawBody);
   } catch {
     return json({ error: 'Dữ liệu JSON không hợp lệ.' }, 400);
   }

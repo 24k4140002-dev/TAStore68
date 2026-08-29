@@ -14,17 +14,19 @@ export default function UnreadBanner({
   isScanning,
   onPageClick, // (pageId) => switch page + filter unread
   onMarkAllAsRead,
+  isMarkingRead = false,
   onDismiss
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   if (!unreadSummary) return null;
 
-  const { total, perPage } = unreadSummary;
+  const { total, perPage, readNotice } = unreadSummary;
   const pagesWithUnread = perPage.filter(p => p.unreadCount > 0);
+  const pagesWithErrors = perPage.filter(p => p.error);
 
   // All caught up state
-  if (total === 0 && !isScanning) {
+  if (total === 0 && !isScanning && pagesWithErrors.length === 0) {
     return (
       <div className="mx-3 mt-3 mb-1 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200/60 dark:border-emerald-800/40 flex items-center gap-2.5 select-none">
         <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/50 flex items-center justify-center flex-shrink-0">
@@ -32,10 +34,10 @@ export default function UnreadBanner({
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-xs font-bold text-emerald-700 dark:text-emerald-300">
-            Tất cả đã đọc ✓
+            Meta không báo tin chưa đọc ✓
           </p>
           <p className="text-[11px] text-emerald-600/70 dark:text-emerald-400/70">
-            Không có tin nhắn chưa trả lời từ {perPage.length} page
+            Đã kiểm tra {perPage.length} Page
           </p>
         </div>
       </div>
@@ -61,11 +63,39 @@ export default function UnreadBanner({
     );
   }
 
+  if (total === 0 && pagesWithErrors.length > 0) {
+    return (
+      <div className="mx-3 mt-3 mb-1 p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-800/40 select-none">
+        <p className="text-xs font-bold text-amber-800 dark:text-amber-300">Chưa quét đủ tin chưa đọc</p>
+        <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-400">
+          {pagesWithErrors.length} Page đang lỗi tải; app không coi các Page đó là đã đọc hết.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-3 mt-3 mb-1 select-none">
+      {readNotice?.text && (
+        <div className={`mb-1.5 rounded-lg border px-3 py-2 text-[11px] font-semibold ${
+          readNotice.tone === 'success'
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300'
+            : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300'
+        }`}>
+          {readNotice.text}
+        </div>
+      )}
       {/* Main Banner - Clickable Header */}
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setIsExpanded(!isExpanded)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setIsExpanded(!isExpanded);
+          }
+        }}
         className="w-full p-3 rounded-xl bg-gradient-to-r from-red-50 to-orange-50 dark:from-red-950/30 dark:to-orange-950/20 border border-red-200/60 dark:border-red-800/40 flex items-center gap-2.5 hover:shadow-md transition-all duration-200 group"
       >
         {/* Bell Icon with Badge */}
@@ -82,7 +112,7 @@ export default function UnreadBanner({
         {/* Text */}
         <div className="flex-1 min-w-0 text-left">
           <p className="text-[13px] font-extrabold text-red-700 dark:text-red-300 leading-tight">
-            {total} tin nhắn chưa trả lời
+            {total} hội thoại chưa đọc theo Meta
           </p>
           <p className="text-[11px] text-red-600/70 dark:text-red-400/60 leading-tight mt-0.5">
             Từ {pagesWithUnread.length}/{perPage.length} page
@@ -95,10 +125,11 @@ export default function UnreadBanner({
             e.stopPropagation();
             onMarkAllAsRead?.();
           }}
+          disabled={isMarkingRead}
           className="px-2.5 py-1.5 rounded-lg bg-white/80 dark:bg-slate-800/80 text-[11px] font-bold text-red-600 dark:text-red-400 border border-red-200/60 dark:border-red-800/40 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors flex-shrink-0"
-          title="Đánh dấu tất cả đã đọc"
+          title="Yêu cầu Meta đánh dấu các tin chưa đọc đang tải"
         >
-          ✓ Đã đọc
+          {isMarkingRead ? 'Đang đối chiếu…' : '✓ Đọc tin đang tải'}
         </button>
 
         {/* Expand Arrow */}
@@ -106,7 +137,7 @@ export default function UnreadBanner({
           ? <ChevronUp className="w-4 h-4 text-red-400 flex-shrink-0" />
           : <ChevronDown className="w-4 h-4 text-red-400 flex-shrink-0" />
         }
-      </button>
+      </div>
 
       {/* Expanded Page List */}
       {isExpanded && (
@@ -123,7 +154,7 @@ export default function UnreadBanner({
 
           {/* Page Items */}
           <div className="max-h-[200px] overflow-y-auto">
-            {perPage
+            {[...perPage]
               .sort((a, b) => b.unreadCount - a.unreadCount)
               .map((page) => (
                 <button

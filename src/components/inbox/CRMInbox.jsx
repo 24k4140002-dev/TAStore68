@@ -13,28 +13,50 @@ import { triggerNewMessageNotification } from '../../services/notificationServic
 import {
   confirmOptimisticMessage,
   createOptimisticMessage,
+  isConversationRequestCurrent,
+  mergeMessageWindow,
   removeOptimisticMessage
 } from '../../services/messageState';
 import {
+  persistMessageCache,
+  readMessageCache,
+  setCacheItemWithMessageEviction
+} from '../../services/messageCache';
+import {
+  mergeLabelsByName
+} from '../../services/metaOutcomeState';
+import {
   fetchPages,
   fetchPageConversations,
+  fetchPageConversationHeads,
+  getPageDisplayName,
   fetchConversationMessages,
   markConversationAsRead,
+  canMarkConversationSeen,
   sendMessengerMessage,
   sendCommentReply,
   sendPrivateReply,
   fetchAllPagesUnreadSummary,
   fetchPageLabels,
-  fetchPageLabelsWithUsers,
-  createPageLabel,
-  assignLabelToUser,
-  unassignLabelFromUser,
   fetchUserLabels,
   syncAssignPageLabel,
   syncUnassignPageLabel,
+  subscribeAllPagesWebhooks,
   runInChunks,
   DEFAULT_QUICK_REPLIES
 } from '../../services/facebookApi';
+import { runWithCrossTabSyncLock } from '../../utils/crossTabSync';
+import { mergeRefreshedPageConversations } from '../../services/conversationRefresh';
+import { PUSH_PAGE_SELECTION_CHANGED_EVENT } from '../../services/pushState';
+import {
+  applyConfirmedReadsToConversations,
+  applyConfirmedReadsToSummary,
+  collectConfirmedReadCandidates,
+  createReadCandidate,
+  filterCurrentReadCandidates,
+  getConversationReadMarker,
+  persistConfirmedReadsToInboxCaches
+} from '../../services/readState';
 
 // Default Meta Business Suite standard labels
 const DEFAULT_META_LABELS = [
@@ -47,18 +69,44 @@ const DEFAULT_META_LABELS = [
   { id: 'meta_cancelled', name: 'Đã hủy đơn', emoji: '❌', color: '#ef4444' }
 ];
 
-// Helper: get read conversation map from localStorage
-function getReadMap() {
+function getStoredArray(key) {
   try {
-    return JSON.parse(localStorage.getItem('metapost_read_map') || '{}');
-  } catch { return {}; }
-}
-function saveReadMap(map) {
-  localStorage.setItem('metapost_read_map', JSON.stringify(map));
+    const value = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
 }
 
 const STATUS_MAP_KEY = 'metapost_status_map';
 const STARRED_MAP_KEY = 'metapost_starred_map';
+const INITIAL_MESSAGE_LIMIT = 30;
+const ACTIVE_THREAD_SYNC_LIMIT = 10;
+const ACTIVE_THREAD_SYNC_MS = 10_000;
+const FOREGROUND_SELECTED_PAGE_SYNC_MS = 45_000;
+const FOREGROUND_ALL_PAGES_SYNC_MS = 180_000;
+const FOREGROUND_OTHER_PAGES_SYNC_MS = 60_000;
+const BACKGROUND_SYNC_MS = 300_000;
+const FOREGROUND_EVENT_COOLDOWN_MS = 15_000;
+const META_DONE_LABEL = {
+  id: 'meta_workflow_done',
+  name: 'Đã xử lý',
+  emoji: '✅',
+  color: '#10b981',
+  source: 'local'
+};
+const META_FOLLOWUP_LABEL = {
+  id: 'meta_workflow_followup',
+  name: 'Cần theo dõi',
+  emoji: '⭐',
+  color: '#f59e0b',
+  source: 'local'
+};
+
+function hasLabelName(labels = [], name = '') {
+  const target = name.trim().toLocaleLowerCase('vi-VN');
+  return labels.some(label => (label.name || '').trim().toLocaleLowerCase('vi-VN') === target);
+}
 
 function getLocalMap(key) {
   try {
@@ -74,24 +122,23 @@ function saveLocalMap(key, map) {
 
 function applyLocalConversationState(conversation, statusMap, starredMap) {
   const id = conversation.fb_conversation_id;
+  const hasDoneLabel = hasLabelName(conversation.labels, META_DONE_LABEL.name);
+  const hasFollowupLabel = hasLabelName(conversation.labels, META_FOLLOWUP_LABEL.name);
+  const savedStatus = statusMap[id];
+  const hasSavedStatus = Object.prototype.hasOwnProperty.call(statusMap, id);
+  const hasSavedStarred = Object.prototype.hasOwnProperty.call(starredMap, id);
   return {
     ...conversation,
-    status: statusMap[id] || conversation.status,
-    is_starred: Object.prototype.hasOwnProperty.call(starredMap, id)
+    status: hasSavedStatus ? savedStatus : (hasDoneLabel ? 'done' : conversation.status),
+    is_starred: hasSavedStarred
       ? Boolean(starredMap[id])
-      : Boolean(conversation.is_starred)
+      : (hasFollowupLabel || Boolean(conversation.is_starred))
   };
 }
 
-export default function CRMInbox({ fbToken, onOpenTokenModal }) {
-  const [pages, setPages] = useState(() => JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]'));
-  const [visiblePageIds, setVisiblePageIds] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('metapost_visible_page_ids') || '[]');
-    } catch {
-      return [];
-    }
-  });
+export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTokenModal }) {
+  const [pages, setPages] = useState(() => getStoredArray('metapost_pages_cache'));
+  const [visiblePageIds, setVisiblePageIds] = useState(() => getStoredArray('metapost_visible_page_ids'));
   const [selectedPageId, setSelectedPageId] = useState(() => localStorage.getItem('metapost_selected_page_id') || 'all');
   const [conversations, setConversations] = useState(() => {
     const savedPageId = localStorage.getItem('metapost_selected_page_id') || 'all';
@@ -109,7 +156,9 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
   const [messagesNextCursor, setMessagesNextCursor] = useState(null);
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
+  const [messageLoadError, setMessageLoadError] = useState('');
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
+  const [conversationLoadError, setConversationLoadError] = useState(null);
 
   // Computed active pages (filtered by user selection, e.g. 3-5 stores)
   const activePages = visiblePageIds.length > 0
@@ -119,6 +168,37 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
   // Mobile state: 'list' (shows sidebar) | 'chat' (shows thread)
   const [mobileView, setMobileView] = useState('list');
   const [isProfilePanelOpenOnMobile, setIsProfilePanelOpenOnMobile] = useState(false);
+
+  const returnToMobileConversationList = useCallback((popHistory = true) => {
+    setMobileView('list');
+    setIsProfilePanelOpenOnMobile(false);
+    localStorage.removeItem('metapost_active_conv_id');
+    if (
+      popHistory
+      && window.innerWidth < 768
+      && window.history.state?.metapostView === 'chat'
+    ) {
+      window.history.back();
+    }
+  }, []);
+
+  useEffect(() => {
+    // A refreshed mobile tab always starts on the list, so remove a stale
+    // same-document chat history marker before the next conversation opens.
+    if (window.innerWidth < 768 && window.history.state?.metapostView === 'chat') {
+      window.history.replaceState(
+        { ...window.history.state, metapostView: 'list', metapostConversationId: null },
+        '',
+        window.location.href
+      );
+    }
+
+    const handleBrowserBack = () => {
+      if (window.innerWidth < 768) returnToMobileConversationList(false);
+    };
+    window.addEventListener('popstate', handleBrowserBack);
+    return () => window.removeEventListener('popstate', handleBrowserBack);
+  }, [returnToMobileConversationList]);
 
   // Filters
   const [channelFilter, setChannelFilter] = useState('all');
@@ -142,6 +222,8 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
   // Unread Dashboard
   const [unreadSummary, setUnreadSummary] = useState(null);
   const [isUnreadScanning, setIsUnreadScanning] = useState(false);
+  const [isMarkingRead, setIsMarkingRead] = useState(false);
+  const [readActionNotice, setReadActionNotice] = useState(null);
 
   // Modals
   const [activeMediaModal, setActiveMediaModal] = useState(null);
@@ -150,9 +232,59 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
   const [isQuickRepliesOpen, setIsQuickRepliesOpen] = useState(false);
   const [isVietQROpen, setIsVietQROpen] = useState(false);
   const [isPageManagerOpen, setIsPageManagerOpen] = useState(false);
-  const knownMessagesMapRef = useRef({});
+  const notificationHeadsRef = useRef(new Map());
+  const notificationMonitorRunningRef = useRef(false);
+  const backgroundConversationSyncRunningRef = useRef(false);
   const activeConversationRef = useRef(activeConversation);
+  const conversationsRef = useRef(conversations);
+  const messageRequestIdRef = useRef(0);
+  const conversationListRequestIdRef = useRef(0);
+  const didRestoreActiveConversationRef = useRef(false);
+  const handledNotificationTargetRef = useRef('');
+  const loadedPageLabelsRef = useRef(new Set());
+  const unsupportedPageLabelReadsRef = useRef(new Set());
+  const unsupportedUserLabelReadsRef = useRef(new Set());
+  const lastListSyncAtRef = useRef(0);
+  const lastNotificationMonitorAtRef = useRef(0);
   activeConversationRef.current = activeConversation;
+  conversationsRef.current = conversations;
+
+  const applyMetaLabelsToConversation = useCallback((conversation, fbLabels) => {
+    if (!conversation?.fb_conversation_id || !conversation?.customer_psid) return;
+
+    const conversationId = conversation.fb_conversation_id;
+    let currentCached = [];
+    try {
+      currentCached = JSON.parse(localStorage.getItem(`metapost_labels_${conversationId}`) || '[]');
+    } catch {}
+
+    // Meta is authoritative only for API-backed labels. App workflow state is
+    // independent because Business Suite's native Inbox statuses are private.
+    const retainedLabels = currentCached.filter(label => label.source !== 'meta' && label.source !== 'meta_auto');
+    const pageScopedLabels = (fbLabels || []).map(label => ({ ...label, page_id: conversation.page_id }));
+    const merged = mergeLabelsByName(retainedLabels, pageScopedLabels);
+    const metaDone = hasLabelName(merged, META_DONE_LABEL.name);
+    const metaFollowup = hasLabelName(merged, META_FOLLOWUP_LABEL.name);
+    const statusMap = getLocalMap(STATUS_MAP_KEY);
+    const starredMap = getLocalMap(STARRED_MAP_KEY);
+    const hasLocalStatus = Object.prototype.hasOwnProperty.call(statusMap, conversationId);
+    const hasLocalStarred = Object.prototype.hasOwnProperty.call(starredMap, conversationId);
+
+    localStorage.setItem(`metapost_labels_${conversationId}`, JSON.stringify(merged));
+    localStorage.setItem(`metapost_labels_${conversation.customer_psid}`, JSON.stringify(merged));
+    setActiveConversation(prev => prev?.fb_conversation_id === conversationId ? {
+      ...prev,
+      labels: merged,
+      status: metaDone && !hasLocalStatus ? 'done' : prev.status,
+      is_starred: hasLocalStarred ? prev.is_starred : (metaFollowup || prev.is_starred)
+    } : prev);
+    setConversations(prev => prev.map(item => item.fb_conversation_id === conversationId ? {
+      ...item,
+      labels: merged,
+      status: metaDone && !hasLocalStatus ? 'done' : item.status,
+      is_starred: hasLocalStarred ? item.is_starred : (metaFollowup || item.is_starred)
+    } : item));
+  }, []);
 
   // 1. Load Meta & Page Labels (from localStorage & defaults)
   const loadLabelsAndTags = () => {
@@ -182,6 +314,7 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
       if (fetchedPages.length > 0) {
         setPages(fetchedPages);
         localStorage.setItem('metapost_pages_cache', JSON.stringify(fetchedPages));
+        subscribeAllPagesWebhooks(fetchedPages).catch(() => {});
         return fetchedPages;
       }
     } catch {
@@ -201,73 +334,137 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
   // 3. Fetch All Conversations in Parallel (Throttled to avoid Rate Limit #4, supports Silent Background Sync)
   const loadAllConversations = useCallback(async (currentPages = pages, silent = false) => {
     if (!fbToken || currentPages.length === 0) return;
-    if (!silent) setIsLoadingConversations(true);
+    if (silent && backgroundConversationSyncRunningRef.current) return;
+    if (silent) backgroundConversationSyncRunningRef.current = true;
+    const requestId = ++conversationListRequestIdRef.current;
+    if (!silent) {
+      setIsLoadingConversations(true);
+      setConversationLoadError(null);
+    }
 
     try {
       const storedPageId = localStorage.getItem('metapost_selected_page_id') || selectedPageId;
       const targetPages = storedPageId === 'all'
         ? currentPages
         : currentPages.filter(p => p.id === storedPageId);
+      const conversationLimit = storedPageId === 'all' ? (silent ? 10 : 20) : 50;
+
+      const progressiveConversationMap = new Map(
+        conversationsRef.current.map(conversation => [conversation.fb_conversation_id, conversation])
+      );
+      const shouldRenderProgressively = storedPageId === 'all' && progressiveConversationMap.size === 0;
+      const statusMapForProgress = getLocalMap(STATUS_MAP_KEY);
+      const starredMapForProgress = getLocalMap(STARRED_MAP_KEY);
 
       // Fetch conversations in throttled batches (2 pages per batch, 200ms delay) to prevent Facebook Rate Limit #4
       const results = await runInChunks(
         targetPages,
-        page => fetchPageConversations(page.id, page.name, page.access_token || fbToken),
+        page => fetchPageConversations(page.id, page.name, page.access_token || fbToken, null, conversationLimit),
         2,
-        200
+        200,
+        batchResults => {
+          if (silent || !shouldRenderProgressively) return;
+          const latestSelectedPageId = localStorage.getItem('metapost_selected_page_id') || selectedPageId;
+          if (requestId !== conversationListRequestIdRef.current || latestSelectedPageId !== storedPageId) return;
+
+          batchResults.forEach(result => {
+            if (result.status !== 'fulfilled' || !Array.isArray(result.value)) return;
+            result.value.forEach(rawConversation => {
+              const conversation = applyLocalConversationState(
+                rawConversation,
+                statusMapForProgress,
+                starredMapForProgress
+              );
+              progressiveConversationMap.set(conversation.fb_conversation_id, conversation);
+            });
+          });
+          const progressive = [...progressiveConversationMap.values()].sort(
+            (left, right) => new Date(right.last_message_at || 0) - new Date(left.last_message_at || 0)
+          );
+          conversationsRef.current = progressive;
+          setConversations(progressive);
+        }
       );
 
-      const combined = [];
+      let combined = [];
       const newCursors = {};
+      const failures = [];
       let anyHasMore = false;
 
-      results.forEach(res => {
+      results.forEach((res, index) => {
         if (res.status === 'fulfilled' && Array.isArray(res.value)) {
           combined.push(...res.value);
-          if (res.value.length > 0 && res.value[0]?.page_id) {
-            newCursors[res.value[0].page_id] = res.value.nextCursor || null;
+          const resultPageId = res.value.pageId || res.value[0]?.page_id;
+          if (resultPageId) {
+            newCursors[resultPageId] = res.value.nextCursor || null;
             if (res.value.hasMore) anyHasMore = true;
           }
+        } else if (res.status === 'rejected') {
+          failures.push({ page: targetPages[index], error: res.reason });
         }
       });
 
+      const latestSelectedPageId = localStorage.getItem('metapost_selected_page_id') || selectedPageId;
+      if (requestId !== conversationListRequestIdRef.current || latestSelectedPageId !== storedPageId) {
+        return;
+      }
+
       setPageCursors(newCursors);
       setHasMoreOlder(anyHasMore);
+      if (failures.length > 0) {
+        const firstFailure = failures[0];
+        setConversationLoadError({
+          pageId: storedPageId,
+          message: `${failures.map(item => item.page.name).join(', ')}: ${firstFailure?.error?.message || 'Meta chưa trả được danh sách hội thoại.'} Đang giữ dữ liệu lần tải trước.`,
+          code: firstFailure?.error?.code,
+          httpStatus: firstFailure?.error?.httpStatus
+        });
+        // Keep the last good cache instead of replacing it with an empty list
+        // when Meta has returned an error for every requested Page.
+        if (combined.length === 0) return;
+      } else {
+        setConversationLoadError(null);
+      }
+
+      // First-page polling must refresh matching conversations without
+      // discarding older pages the operator already loaded in this view.
+      combined = mergeRefreshedPageConversations(
+        combined,
+        conversationsRef.current,
+        targetPages.map(page => page.id)
+      );
 
       // Apply read tracking, new message notification, and persistent labels
-      const currentReadMap = getReadMap();
       const statusMap = getLocalMap(STATUS_MAP_KEY);
       const starredMap = getLocalMap(STARRED_MAP_KEY);
       combined.forEach((rawConversation, index) => {
         const c = applyLocalConversationState(rawConversation, statusMap, starredMap);
         combined[index] = c;
 
-        // Read tracking
-        const readUntil = currentReadMap[c.fb_conversation_id];
-        if (readUntil && c.last_message_at) {
-          if (new Date(c.last_message_at).getTime() <= new Date(readUntil).getTime()) {
-            c.unread_count = 0;
-          }
-        }
-
-        // New Message Audio & Lock Screen Notification Trigger
-        const prevSnippet = knownMessagesMapRef.current[c.fb_conversation_id];
-        if (prevSnippet !== undefined && prevSnippet !== c.snippet && Boolean(c.snippet)) {
+        // The full list refresh already contains the newest message. Reuse it
+        // for notifications instead of making another Graph request for the
+        // same Page in the cross-Page monitor.
+        const notificationKey = `${c.page_id}:${c.fb_conversation_id}`;
+        const notificationMarker = c.last_message_id || `${c.last_message_at || ''}:${c.snippet || ''}`;
+        const previousMarker = notificationHeadsRef.current.get(notificationKey);
+        notificationHeadsRef.current.set(notificationKey, notificationMarker);
+        if (
+          previousMarker
+          && previousMarker !== notificationMarker
+          && c.last_sender_id
+          && c.last_sender_id !== c.page_id
+        ) {
           triggerNewMessageNotification({
             pageId: c.page_id,
             pageName: c.page_name,
             convId: c.fb_conversation_id,
             customerName: c.customer_name,
+            messageId: c.last_message_id || notificationMarker,
             messageText: c.snippet,
             avatarUrl: c.avatar_url,
             playSound: true
           });
-
-          // The active-thread poller owns message refreshes. Avoid a duplicate
-          // Graph request here when the 15-second conversation scan sees the
-          // same new snippet.
         }
-        knownMessagesMapRef.current[c.fb_conversation_id] = c.snippet;
 
         // Persistent Customer Labels from localStorage
         const savedLabels = JSON.parse(
@@ -281,31 +478,54 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
         }
       });
 
+      combined.sort(
+        (left, right) => new Date(right.last_message_at || 0) - new Date(left.last_message_at || 0)
+      );
+
+      conversationsRef.current = combined;
       setConversations(combined);
-      localStorage.setItem('metapost_inbox_cache', JSON.stringify(combined));
-      localStorage.setItem(`metapost_inbox_cache_${storedPageId}`, JSON.stringify(combined));
+      const serializedConversations = JSON.stringify(combined);
+      setCacheItemWithMessageEviction(localStorage, 'metapost_inbox_cache', serializedConversations);
+      setCacheItemWithMessageEviction(
+        localStorage,
+        `metapost_inbox_cache_${storedPageId}`,
+        serializedConversations
+      );
 
       // Restore active conversation from localStorage on load/F5 (ONLY for Desktop 2-pane view, NEVER auto-open on mobile)
       const isDesktop = window.innerWidth >= 768;
       if (isDesktop) {
-        const savedActiveId = localStorage.getItem('metapost_active_conv_id');
-        if (savedActiveId) {
-          const matched = combined.find(c => c.fb_conversation_id === savedActiveId);
-          if (matched) {
-            handleSelectConversation(matched, false);
-          } else if (combined.length > 0) {
-            handleSelectConversation(combined[0], false);
-          }
-        } else if (!activeConversation && combined.length > 0) {
-          handleSelectConversation(combined[0], false);
+        const currentActiveId = activeConversationRef.current?.fb_conversation_id;
+        const refreshedActive = currentActiveId
+          ? combined.find(c => c.fb_conversation_id === currentActiveId)
+          : null;
+
+        if (refreshedActive) {
+          setActiveConversation(prev => prev ? { ...prev, ...refreshedActive } : refreshedActive);
+        } else if (!currentActiveId) {
+          const savedActiveId = localStorage.getItem('metapost_active_conv_id');
+          const matched = savedActiveId
+            ? combined.find(c => c.fb_conversation_id === savedActiveId)
+            : null;
+          const conversationToRestore = matched || combined[0];
+          if (conversationToRestore) handleSelectConversation(conversationToRestore, false);
         }
       }
     } catch (err) {
       console.error('Fetch all conversations error:', err);
+      if (requestId === conversationListRequestIdRef.current) {
+        setConversationLoadError({
+          pageId: localStorage.getItem('metapost_selected_page_id') || selectedPageId,
+          message: err?.message || 'Không thể tải danh sách hội thoại.'
+        });
+      }
     } finally {
-      if (!silent) setIsLoadingConversations(false);
+      if (silent) backgroundConversationSyncRunningRef.current = false;
+      if (requestId === conversationListRequestIdRef.current) {
+        setIsLoadingConversations(false);
+      }
     }
-  }, [fbToken, pages, selectedPageId, activeConversation]);
+  }, [fbToken, pages, selectedPageId]);
 
   // Load More / Older Conversations
   const handleLoadMoreConversations = async () => {
@@ -351,7 +571,11 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
             .filter(c => !existingIds.has(c.fb_conversation_id))
             .map(c => applyLocalConversationState(c, statusMap, starredMap));
           const merged = [...prev, ...freshOlder];
-          localStorage.setItem('metapost_inbox_cache', JSON.stringify(merged));
+          setCacheItemWithMessageEviction(
+            localStorage,
+            'metapost_inbox_cache',
+            JSON.stringify(merged)
+          );
           return merged;
         });
       }
@@ -363,168 +587,250 @@ export default function CRMInbox({ fbToken, onOpenTokenModal }) {
   };
 
   // 4. Select Conversation & Load Messages
-// Helper: Gentle audio chime on new message from customer
-function playChimeSound() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.1); // A5
-    gain.gain.setValueAtTime(0.12, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.35);
-  } catch {}
-}
-
   // 4. Select Conversation with Instant SWR Cache
   const handleSelectConversation = async (conv, shouldSwitchMobileView = true) => {
+    const requestId = ++messageRequestIdRef.current;
+    const conversationId = conv.fb_conversation_id;
+    let hadCachedMessages = false;
+    let cachedMessages = [];
+    setMessageLoadError('');
+    setIsLoadingOlderMessages(false);
+
     // Merge persistent labels before setting active conversation
-    const savedLabels = JSON.parse(
-      localStorage.getItem(`metapost_labels_${conv.fb_conversation_id}`) ||
-      (conv.customer_psid ? localStorage.getItem(`metapost_labels_${conv.customer_psid}`) : null) ||
-      'null'
-    );
+    let savedLabels = null;
+    try {
+      savedLabels = JSON.parse(
+        localStorage.getItem(`metapost_labels_${conv.fb_conversation_id}`) ||
+        (conv.customer_psid ? localStorage.getItem(`metapost_labels_${conv.customer_psid}`) : null) ||
+        'null'
+      );
+    } catch {}
+    const trustedSavedLabels = Array.isArray(savedLabels)
+      ? savedLabels.filter(label => label?.source !== 'meta_auto')
+      : savedLabels;
+    if (Array.isArray(savedLabels) && trustedSavedLabels.length !== savedLabels.length) {
+      localStorage.setItem(`metapost_labels_${conversationId}`, JSON.stringify(trustedSavedLabels));
+      if (conv.customer_psid) {
+        localStorage.setItem(`metapost_labels_${conv.customer_psid}`, JSON.stringify(trustedSavedLabels));
+      }
+    }
     const convWithLabels = {
       ...conv,
-      labels: (savedLabels && savedLabels.length > 0) ? savedLabels : (conv.labels || [])
+      labels: (trustedSavedLabels && trustedSavedLabels.length > 0)
+        ? trustedSavedLabels
+        : (conv.labels || []).filter(label => label?.source !== 'meta_auto')
     };
 
     setActiveConversation(convWithLabels);
-    localStorage.setItem('metapost_active_conv_id', conv.fb_conversation_id);
+    localStorage.setItem('metapost_active_conv_id', conversationId);
     if (shouldSwitchMobileView) {
       setMobileView('chat'); // Switch view on mobile to chat ONLY on explicit tap
+      setIsProfilePanelOpenOnMobile(false);
+      if (window.innerWidth < 768 && window.history.state?.metapostView !== 'chat') {
+        window.history.pushState(
+          { ...window.history.state, metapostView: 'chat', metapostConversationId: conversationId },
+          '',
+          window.location.href
+        );
+      }
     }
 
     // ⚡ INSTANT SWR CACHE: Render previously cached messages in 0.001s
-    try {
-      const cachedMsgs = JSON.parse(
-        localStorage.getItem(`metapost_msgs_${conv.fb_conversation_id}`) ||
-        sessionStorage.getItem(`metapost_msgs_${conv.fb_conversation_id}`) ||
-        '[]'
-      );
-      if (cachedMsgs.length > 0) {
-        setMessages(cachedMsgs);
-        setIsLoadingMessages(false);
-      } else {
-        setIsLoadingMessages(true);
-      }
-    } catch {
+    cachedMessages = readMessageCache(conversationId);
+    if (cachedMessages.length > 0) {
+      hadCachedMessages = true;
+      setMessages(cachedMessages);
+      setIsLoadingMessages(false);
+    } else {
+      setMessages([]);
+      setMessagesNextCursor(null);
+      setHasMoreMessages(false);
       setIsLoadingMessages(true);
     }
 
-    // Mark this conversation as read with current timestamp
-    const nowIso = new Date().toISOString();
-    const currentReadMap = getReadMap();
-    currentReadMap[conv.fb_conversation_id] = nowIso;
-    saveReadMap(currentReadMap);
-
-    // Update the conversation's unread_count in state
-    setConversations(prev => prev.map(c =>
-      c.fb_conversation_id === conv.fb_conversation_id ? { ...c, unread_count: 0 } : c
-    ));
-    // Update the unread summary
-    if (unreadSummary) {
-      const pageOfConv = conv.page_id;
-      setUnreadSummary(prev => {
-        if (!prev) return prev;
-        const updatedPerPage = prev.perPage.map(p =>
-          p.pageId === pageOfConv ? { ...p, unreadCount: Math.max(0, p.unreadCount - (conv.unread_count > 0 ? 1 : 0)) } : p
-        );
-        return { total: updatedPerPage.reduce((s, p) => s + p.unreadCount, 0), perPage: updatedPerPage };
-      });
-    }
-
-    try {
-      // Sync read status with Facebook Meta Business Suite (non-blocking)
-      markConversationAsRead(conv.fb_conversation_id, conv.page_token || fbToken);
-
-      const msgs = await fetchConversationMessages(conv.fb_conversation_id, conv.page_token || fbToken, null, 80);
-      if (Array.isArray(msgs) && msgs.length > 0) {
-        setMessages(msgs);
-        setMessagesNextCursor(msgs.nextCursor || null);
-        setHasMoreMessages(!!msgs.hasMore);
-        localStorage.setItem(`metapost_msgs_${conv.fb_conversation_id}`, JSON.stringify(msgs));
-        sessionStorage.setItem(`metapost_msgs_${conv.fb_conversation_id}`, JSON.stringify(msgs));
-      } else {
-        setHasMoreMessages(false);
-      }
-      setIsLoadingMessages(false);
-
-      // Background sync with Facebook custom labels if PSID exists
-      if (conv.customer_psid) {
-        fetchUserLabels(conv.customer_psid, conv.page_token || fbToken).then(fbLabels => {
-          if (fbLabels && fbLabels.length > 0) {
-            const currentCached = JSON.parse(
-              localStorage.getItem(`metapost_labels_${conv.fb_conversation_id}`) || '[]'
-            );
-            const merged = [...currentCached];
-            const existingKeys = new Set(merged.map(m => (m.name || '').toLowerCase()));
-            fbLabels.forEach(fl => {
-              if (!existingKeys.has((fl.name || '').toLowerCase())) {
-                merged.push(fl);
-              }
-            });
-            localStorage.setItem(`metapost_labels_${conv.fb_conversation_id}`, JSON.stringify(merged));
-            if (conv.customer_psid) {
-              localStorage.setItem(`metapost_labels_${conv.customer_psid}`, JSON.stringify(merged));
-            }
-            setActiveConversation(prev => prev?.fb_conversation_id === conv.fb_conversation_id ? { ...prev, labels: merged } : prev);
-            setConversations(prev => prev.map(c => c.fb_conversation_id === conv.fb_conversation_id ? { ...c, labels: merged } : c));
-          }
-        });
-      }
-
-      // Load customer orders from localStorage
-      if (conv.customer_psid) {
+    // Load local CRM details immediately instead of waiting for the Graph request.
+    if (conv.customer_psid) {
+      try {
         const savedOrders = JSON.parse(localStorage.getItem(`orders_${conv.customer_psid}`) || '[]');
-        setCustomerOrders(savedOrders);
-      } else {
-        setCustomerOrders([]);
-      }
-
-      // Load customer CRM data (phone, email, notes) from localStorage
-      if (conv.customer_psid) {
-        const savedCust = JSON.parse(localStorage.getItem(`metapost_cust_${conv.customer_psid}`) || '{}');
+        const rawSavedCust = JSON.parse(localStorage.getItem(`metapost_cust_${conv.customer_psid}`) || '{}');
+        const savedCust = rawSavedCust.lead_stage_source === 'meta_auto'
+          ? {
+              ...rawSavedCust,
+              lead_stage: 'potential',
+              lead_stage_source: null,
+              lead_stage_updated_at: null
+            }
+          : rawSavedCust;
+        if (rawSavedCust.lead_stage_source === 'meta_auto') {
+          localStorage.setItem(`metapost_cust_${conv.customer_psid}`, JSON.stringify(savedCust));
+        }
         const savedNotes = JSON.parse(localStorage.getItem(`metapost_notes_${conv.customer_psid}`) || '[]');
+        setCustomerOrders(savedOrders);
         setCustomerCRMData({
+          ...savedCust,
           phone: savedCust.phone || '',
           email: savedCust.email || '',
           address: savedCust.address || '',
           lead_stage: savedCust.lead_stage || 'potential',
           notes: savedNotes
         });
-      } else {
+      } catch {
+        setCustomerOrders([]);
         setCustomerCRMData({ phone: '', email: '', address: '', lead_stage: 'potential', notes: [] });
+      }
+    } else {
+      setCustomerOrders([]);
+      setCustomerCRMData({ phone: '', email: '', address: '', lead_stage: 'potential', notes: [] });
+    }
+
+    // An explicit tap may ask Meta to mark the thread seen, but the red badge is
+    // cleared only after a read-back confirms unread_count=0 for the same latest
+    // message. A newer arrival while this request is pending stays unread.
+    if (shouldSwitchMobileView && Number(conv.unread_count || 0) > 0) {
+      const candidate = createReadCandidate(conv);
+      const canSyncRead = canMarkConversationSeen(conv);
+      const pendingState = canSyncRead ? 'pending' : 'unconfirmed';
+      const setCandidateSyncState = (state) => {
+        setActiveConversation(prev => (
+          prev?.fb_conversation_id === conversationId
+          && getConversationReadMarker(prev) === candidate.marker
+            ? { ...prev, read_sync_state: state }
+            : prev
+        ));
+        setConversations(prev => {
+          const next = prev.map(item => (
+            item.fb_conversation_id === conversationId
+            && getConversationReadMarker(item) === candidate.marker
+              ? { ...item, read_sync_state: state }
+              : item
+          ));
+          conversationsRef.current = next;
+          return next;
+        });
+      };
+      setCandidateSyncState(pendingState);
+
+      if (canSyncRead) {
+        markConversationAsRead(
+          conv.customer_psid,
+          conv.page_token || fbToken,
+          conversationId
+        ).then(result => {
+          if (!result?.confirmed) {
+            setCandidateSyncState('unconfirmed');
+            return;
+          }
+          const confirmedNow = filterCurrentReadCandidates(conversationsRef.current, [candidate]);
+          if (confirmedNow.length === 0) return;
+          const next = applyConfirmedReadsToConversations(conversationsRef.current, confirmedNow);
+          persistConfirmedReadsToInboxCaches(localStorage, confirmedNow);
+          conversationsRef.current = next;
+          setConversations(next);
+          setActiveConversation(prev => (
+            prev?.fb_conversation_id === conversationId
+            && getConversationReadMarker(prev) === candidate.marker
+              ? { ...prev, unread_count: 0, meta_unread_count: 0, read_sync_state: 'confirmed' }
+              : prev
+          ));
+          setUnreadSummary(prev => applyConfirmedReadsToSummary(prev, confirmedNow));
+        }).catch(() => setCandidateSyncState('failed'));
+      }
+    }
+
+    // Facebook labels are also background-only and must never delay message rendering.
+    if (
+      conv.page_id
+      && !loadedPageLabelsRef.current.has(conv.page_id)
+      && !unsupportedPageLabelReadsRef.current.has(conv.page_id)
+    ) {
+      loadedPageLabelsRef.current.add(conv.page_id);
+      fetchPageLabels(conv.page_id, conv.page_token || fbToken).then(pageLabels => {
+        if (pageLabels?.unsupported) {
+          unsupportedPageLabelReadsRef.current.add(conv.page_id);
+          return;
+        }
+        if (!Array.isArray(pageLabels) || pageLabels.length === 0) return;
+        setAllLabels(prev => {
+          const withoutOldPageLabels = prev.filter(label => label.page_id !== conv.page_id);
+          const next = [...withoutOldPageLabels, ...pageLabels];
+          localStorage.setItem('metapost_all_labels', JSON.stringify(next));
+          return next;
+        });
+      }).catch(() => {
+        loadedPageLabelsRef.current.delete(conv.page_id);
+      });
+    }
+
+    if (conv.customer_psid && !unsupportedUserLabelReadsRef.current.has(conv.page_id)) {
+      fetchUserLabels(conv.customer_psid, conv.page_token || fbToken).then(fbLabels => {
+        if (fbLabels?.unsupported) {
+          unsupportedUserLabelReadsRef.current.add(conv.page_id);
+          return;
+        }
+        applyMetaLabelsToConversation(conv, fbLabels);
+      }).catch(() => {});
+    }
+
+    try {
+      const msgs = await fetchConversationMessages(
+        conversationId,
+        conv.page_token || fbToken,
+        null,
+        INITIAL_MESSAGE_LIMIT
+      );
+
+      if (Array.isArray(msgs) && msgs.length > 0) {
+        const mergedMessages = mergeMessageWindow(cachedMessages, msgs);
+        persistMessageCache(conversationId, mergedMessages);
+
+        if (requestId === messageRequestIdRef.current) {
+          setMessages(mergedMessages);
+          setMessagesNextCursor(msgs.nextCursor || null);
+          setHasMoreMessages(!!msgs.hasMore);
+        }
+
+      } else if (requestId === messageRequestIdRef.current) {
+        if (!hadCachedMessages) setMessages([]);
+        setHasMoreMessages(false);
       }
     } catch (err) {
       console.error('Load messages error:', err);
+      if (requestId === messageRequestIdRef.current) {
+        setMessageLoadError(err?.message || 'Không tải được tin nhắn từ Meta.');
+      }
     } finally {
-      setIsLoadingMessages(false);
+      if (requestId === messageRequestIdRef.current) setIsLoadingMessages(false);
     }
   };
 
   // Load older messages (Yesterday, last week, etc.)
   const handleLoadOlderMessages = async () => {
     if (!activeConversation?.fb_conversation_id || isLoadingOlderMessages) return;
+    const conversationId = activeConversation.fb_conversation_id;
+    const selectionRequestId = messageRequestIdRef.current;
+    const cursorAtStart = messagesNextCursor;
     setIsLoadingOlderMessages(true);
+    setMessageLoadError('');
     try {
       const olderMsgs = await fetchConversationMessages(
-        activeConversation.fb_conversation_id,
+        conversationId,
         activeConversation.page_token || fbToken,
-        messagesNextCursor,
+        cursorAtStart,
         50
       );
+      if (!isConversationRequestCurrent({
+        activeConversationId: activeConversationRef.current?.fb_conversation_id,
+        conversationId,
+        currentRequestId: messageRequestIdRef.current,
+        requestId: selectionRequestId
+      })) return;
       if (Array.isArray(olderMsgs) && olderMsgs.length > 0) {
         setMessages(prev => {
+          if (activeConversationRef.current?.fb_conversation_id !== conversationId) return prev;
           const existingIds = new Set(prev.map(m => m.id));
           const newOlder = olderMsgs.filter(m => !existingIds.has(m.id));
           const merged = [...newOlder, ...prev];
-          localStorage.setItem(`metapost_msgs_${activeConversation.fb_conversation_id}`, JSON.stringify(merged));
+          persistMessageCache(conversationId, merged);
           return merged;
         });
         setMessagesNextCursor(olderMsgs.nextCursor || null);
@@ -534,8 +840,21 @@ function playChimeSound() {
       }
     } catch (err) {
       console.warn('Load older messages error:', err);
+      if (isConversationRequestCurrent({
+        activeConversationId: activeConversationRef.current?.fb_conversation_id,
+        conversationId,
+        currentRequestId: messageRequestIdRef.current,
+        requestId: selectionRequestId
+      })) {
+        setMessageLoadError(err?.message || 'Không tải được lịch sử cũ từ Meta.');
+      }
     } finally {
-      setIsLoadingOlderMessages(false);
+      if (isConversationRequestCurrent({
+        activeConversationId: activeConversationRef.current?.fb_conversation_id,
+        conversationId,
+        currentRequestId: messageRequestIdRef.current,
+        requestId: selectionRequestId
+      })) setIsLoadingOlderMessages(false);
     }
   };
 
@@ -547,37 +866,50 @@ function playChimeSound() {
     const pageId = activeConversation.page_id;
     const pageName = activeConversation.page_name;
     const customerName = activeConversation.customer_name;
+    const customerPsid = activeConversation.customer_psid;
     const avatarUrl = activeConversation.avatar_url;
     const token = activeConversation.page_token || fbToken;
 
     let isSyncing = false;
+    let lastSyncAt = 0;
     const syncActiveThread = async () => {
-      if (document.hidden) return;
+      if (document.hidden || !navigator.onLine) return;
       if (isSyncing) return;
+      if (Date.now() - lastSyncAt < 5_000) return;
       isSyncing = true;
+      lastSyncAt = Date.now();
       try {
-        const latestMsgs = await fetchConversationMessages(convId, token, null, 100);
+        const latestMsgs = await runWithCrossTabSyncLock(
+          `active-thread-${convId}`,
+          () => fetchConversationMessages(convId, token, null, ACTIVE_THREAD_SYNC_LIMIT),
+          { leaseMs: 30_000 }
+        );
         if (latestMsgs && latestMsgs.length > 0) {
           setMessages(prev => {
             const prevIds = new Set(prev.map(m => m.id));
-            const hasNew = latestMsgs.some(m => !prevIds.has(m.id));
+            const newMessages = latestMsgs.filter(message => !prevIds.has(message.id));
+            const hasNew = newMessages.length > 0;
             if (hasNew) {
-              // Check if newest message came from customer (not page)
-              const lastMsg = latestMsgs[latestMsgs.length - 1];
-              if (lastMsg?.from?.id && lastMsg.from.id !== pageId) {
+              // Notify only for a genuinely new incoming message. Sent Page
+              // messages and older records entering the window stay silent.
+              const incomingMessage = [...newMessages]
+                .reverse()
+                .find(message => message?.from?.id && message.from.id !== pageId);
+              if (incomingMessage) {
                 triggerNewMessageNotification({
                   pageId,
                   pageName,
                   convId,
                   customerName,
-                  messageText: lastMsg.message || 'Khách hàng vừa gửi tin nhắn mới',
+                  messageId: incomingMessage.id,
+                  messageText: incomingMessage.message || 'Khách hàng vừa gửi tin nhắn mới',
                   avatarUrl,
                   playSound: true
                 });
               }
-              localStorage.setItem(`metapost_msgs_${convId}`, JSON.stringify(latestMsgs));
-              sessionStorage.setItem(`metapost_msgs_${convId}`, JSON.stringify(latestMsgs));
-              return latestMsgs;
+              const merged = mergeMessageWindow(prev, latestMsgs);
+              persistMessageCache(convId, merged);
+              return merged;
             }
             return prev;
           });
@@ -592,7 +924,7 @@ function playChimeSound() {
     const handleVisibilitySync = () => {
       if (!document.hidden) syncActiveThread();
     };
-    const pollTimer = setInterval(syncActiveThread, 3500);
+    const pollTimer = setInterval(syncActiveThread, ACTIVE_THREAD_SYNC_MS);
     window.addEventListener('focus', syncActiveThread);
     document.addEventListener('visibilitychange', handleVisibilitySync);
 
@@ -606,10 +938,87 @@ function playChimeSound() {
     activeConversation?.page_id,
     activeConversation?.page_name,
     activeConversation?.customer_name,
+    activeConversation?.customer_psid,
     activeConversation?.avatar_url,
     activeConversation?.page_token,
     fbToken
   ]);
+
+  // Meta labels are refreshed when a conversation is selected or explicitly
+  // changed. Continuous label polling caused needless Graph traffic and could
+  // also erase the last good snapshot on Pages where Custom Labels is absent.
+
+  // Notification clicks can arrive after Inbox has already mounted. Switch to
+  // the correct Page first; the pending target effect below opens the chat as
+  // soon as that Page's conversation list is available.
+  useEffect(() => {
+    if (!notificationTarget?.nonce || pages.length === 0) return;
+    if (handledNotificationTargetRef.current === notificationTarget.nonce) return;
+    const targetPageId = String(notificationTarget.pageId || 'all');
+    const targetPages = targetPageId === 'all'
+      ? (activePages.length > 0 ? activePages : pages)
+      : pages.filter(page => String(page.id) === targetPageId);
+    if (targetPages.length === 0) return;
+
+    handledNotificationTargetRef.current = notificationTarget.nonce;
+    setSelectedPageId(targetPageId);
+    setConversationLoadError(null);
+    localStorage.setItem('metapost_selected_page_id', targetPageId);
+    if (notificationTarget.convId) {
+      localStorage.setItem('metapost_pending_conv_id', String(notificationTarget.convId));
+    }
+    if (notificationTarget.senderPsid) {
+      localStorage.setItem('metapost_pending_sender_psid', String(notificationTarget.senderPsid));
+    }
+
+    let cached = [];
+    try {
+      cached = JSON.parse(localStorage.getItem(`metapost_inbox_cache_${targetPageId}`) || '[]');
+    } catch {}
+    if (Array.isArray(cached) && cached.length > 0) {
+      conversationsRef.current = cached;
+      setConversations(cached);
+      loadAllConversations(targetPages, false);
+    } else {
+      loadAllConversations(targetPages, false);
+    }
+  }, [notificationTarget?.nonce, pages, loadAllConversations]);
+
+  // Open the exact customer after a lock-screen notification selected its Page.
+  useEffect(() => {
+    if (conversations.length === 0) return;
+    const pendingSenderPsid = localStorage.getItem('metapost_pending_sender_psid');
+    const pendingConversationId = localStorage.getItem('metapost_pending_conv_id');
+    if (!pendingSenderPsid && !pendingConversationId) return;
+    const matched = conversations.find(conversation => (
+      (
+        (pendingConversationId && String(conversation.fb_conversation_id || '') === pendingConversationId)
+        || (pendingSenderPsid && String(conversation.customer_psid || '') === pendingSenderPsid)
+      )
+      && (selectedPageId === 'all' || String(conversation.page_id || '') === selectedPageId)
+    ));
+    if (!matched) return;
+    localStorage.removeItem('metapost_pending_sender_psid');
+    localStorage.removeItem('metapost_pending_conv_id');
+    handleSelectConversation(matched, true);
+  }, [conversations, selectedPageId]);
+
+  // Restore the last desktop chat from the already-hydrated local cache on F5.
+  useEffect(() => {
+    if (
+      didRestoreActiveConversationRef.current
+      || localStorage.getItem('metapost_pending_sender_psid')
+      || localStorage.getItem('metapost_pending_conv_id')
+      || window.innerWidth < 768
+      || conversations.length === 0
+    ) return;
+    didRestoreActiveConversationRef.current = true;
+    const savedActiveId = localStorage.getItem('metapost_active_conv_id');
+    const matched = savedActiveId
+      ? conversations.find(c => c.fb_conversation_id === savedActiveId)
+      : null;
+    handleSelectConversation(matched || conversations[0], false);
+  }, []);
 
   // 6. Send Message Handler with Optimistic UI
   const handleSendMessage = async ({ text, file, mode }) => {
@@ -630,7 +1039,7 @@ function playChimeSound() {
       });
       setMessages(prev => {
         const next = [...prev, optimisticMsg];
-        localStorage.setItem(`metapost_msgs_${conversationId}`, JSON.stringify(next));
+        persistMessageCache(conversationId, next);
         return next;
       });
     }
@@ -646,13 +1055,9 @@ function playChimeSound() {
       }
 
       if (tempId) {
-        let cachedMessages = [];
-        try {
-          cachedMessages = JSON.parse(localStorage.getItem(`metapost_msgs_${conversationId}`) || '[]');
-        } catch {}
+        const cachedMessages = readMessageCache(conversationId);
         const confirmedCache = confirmOptimisticMessage(cachedMessages, tempId, response);
-        localStorage.setItem(`metapost_msgs_${conversationId}`, JSON.stringify(confirmedCache));
-        sessionStorage.setItem(`metapost_msgs_${conversationId}`, JSON.stringify(confirmedCache));
+        persistMessageCache(conversationId, confirmedCache);
 
         if (activeConversationRef.current?.fb_conversation_id === conversationId) {
           setMessages(prev => confirmOptimisticMessage(prev, tempId, response));
@@ -674,12 +1079,13 @@ function playChimeSound() {
       // Attachments need Meta's normalized attachment payload. Refresh them in
       // the background, outside the send button's critical path.
       if (file) {
-        fetchConversationMessages(conversationId, token, null, 100).then(freshMessages => {
+        fetchConversationMessages(conversationId, token, null, ACTIVE_THREAD_SYNC_LIMIT).then(freshMessages => {
           if (!Array.isArray(freshMessages) || freshMessages.length === 0) return;
-          localStorage.setItem(`metapost_msgs_${conversationId}`, JSON.stringify(freshMessages));
-          sessionStorage.setItem(`metapost_msgs_${conversationId}`, JSON.stringify(freshMessages));
+          const cachedMessages = readMessageCache(conversationId);
+          const mergedCache = mergeMessageWindow(cachedMessages, freshMessages);
+          persistMessageCache(conversationId, mergedCache);
           if (activeConversationRef.current?.fb_conversation_id === conversationId) {
-            setMessages(freshMessages);
+            setMessages(prev => mergeMessageWindow(prev, freshMessages));
           }
         }).catch(() => {});
       }
@@ -687,15 +1093,16 @@ function playChimeSound() {
       return response;
     } catch (err) {
       console.error('Send error:', err);
-      if (tempId) {
-        let cachedMessages = [];
-        try {
-          cachedMessages = JSON.parse(localStorage.getItem(`metapost_msgs_${conversationId}`) || '[]');
-        } catch {}
-        localStorage.setItem(
-          `metapost_msgs_${conversationId}`,
-          JSON.stringify(removeOptimisticMessage(cachedMessages, tempId))
-        );
+      if (tempId && err.textSent) {
+        const cachedMessages = readMessageCache(conversationId);
+        const confirmedCache = confirmOptimisticMessage(cachedMessages, tempId, err.textResponse);
+        persistMessageCache(conversationId, confirmedCache);
+        if (activeConversationRef.current?.fb_conversation_id === conversationId) {
+          setMessages(prev => confirmOptimisticMessage(prev, tempId, err.textResponse));
+        }
+      } else if (tempId) {
+        const cachedMessages = readMessageCache(conversationId);
+        persistMessageCache(conversationId, removeOptimisticMessage(cachedMessages, tempId));
         if (activeConversationRef.current?.fb_conversation_id === conversationId) {
           setMessages(prev => removeOptimisticMessage(prev, tempId));
         }
@@ -706,96 +1113,182 @@ function playChimeSound() {
 
   // 6. Update Status
   const handleUpdateStatus = async (fbConvId, newStatus) => {
+    const target = activeConversationRef.current;
+    if (!target || target.fb_conversation_id !== fbConvId) {
+      throw new Error('Không tìm thấy cuộc trò chuyện cần cập nhật.');
+    }
+
+    const token = target.page_token || fbToken;
+    const currentLabels = target.labels || [];
+    let nextLabels = currentLabels;
+
+    // Workflow state belongs to MetaPost Studio first. Meta Business Suite's
+    // native Done/Follow up/Spam actions are not exposed by the public API, so
+    // a custom Page label is only a best-effort secondary sync.
     setConversations(prev => prev.map(c => {
       if (c.fb_conversation_id === fbConvId) {
-        return { ...c, status: newStatus, unread_count: (newStatus === 'done' ? 0 : c.unread_count) };
+        return { ...c, status: newStatus };
       }
       return c;
     }));
 
-    if (activeConversation?.fb_conversation_id === fbConvId) {
+    if (activeConversationRef.current?.fb_conversation_id === fbConvId) {
       setActiveConversation(prev => ({ ...prev, status: newStatus }));
     }
 
     const statusMap = getLocalMap(STATUS_MAP_KEY);
     statusMap[fbConvId] = newStatus;
     saveLocalMap(STATUS_MAP_KEY, statusMap);
+
+    if (newStatus === 'done') {
+      setStatusFilter('open');
+      if (window.innerWidth < 768) {
+        returnToMobileConversationList();
+      }
+    }
+
+    const canSyncCustomLabel = Boolean(target.page_id && token && target.customer_psid);
+    let metaSynced = null;
+
+    if (newStatus === 'done') {
+      if (canSyncCustomLabel) {
+        const syncedLabel = await syncAssignPageLabel(
+          target.page_id,
+          token,
+          META_DONE_LABEL,
+          target.customer_psid
+        );
+        metaSynced = Boolean(syncedLabel?.metaSynced);
+        if (metaSynced) nextLabels = mergeLabelsByName(currentLabels, [syncedLabel]);
+      }
+    } else {
+      const assigned = currentLabels.find(label => hasLabelName([label], META_DONE_LABEL.name));
+      if (canSyncCustomLabel && assigned?.source === 'meta') {
+        metaSynced = await syncUnassignPageLabel(
+          target.page_id,
+          token,
+          assigned.id,
+          target.customer_psid
+        );
+      }
+      nextLabels = currentLabels.filter(label => !hasLabelName([label], META_DONE_LABEL.name));
+    }
+
+    if (nextLabels !== currentLabels) {
+      setConversations(prev => prev.map(c => (
+        c.fb_conversation_id === fbConvId ? { ...c, labels: nextLabels } : c
+      )));
+      if (activeConversationRef.current?.fb_conversation_id === fbConvId) {
+        setActiveConversation(prev => ({ ...prev, labels: nextLabels }));
+      }
+      localStorage.setItem(`metapost_labels_${fbConvId}`, JSON.stringify(nextLabels));
+      if (target.customer_psid) {
+        localStorage.setItem(`metapost_labels_${target.customer_psid}`, JSON.stringify(nextLabels));
+      }
+    }
+
+    return { localSaved: true, metaSynced };
   };
 
   // 7. Toggle Star
   const handleToggleStar = async (fbConvId) => {
-    let nextStarred = false;
-    setConversations(prev => prev.map(c => {
-      if (c.fb_conversation_id === fbConvId) {
-        nextStarred = !c.is_starred;
-        return { ...c, is_starred: nextStarred };
-      }
-      return c;
-    }));
+    const target = activeConversationRef.current;
+    if (!target || target.fb_conversation_id !== fbConvId) {
+      throw new Error('Không tìm thấy cuộc trò chuyện cần cập nhật.');
+    }
 
-    if (activeConversation?.fb_conversation_id === fbConvId) {
+    const currentLabels = target.labels || [];
+    const nextStarred = !target.is_starred;
+    let nextLabels = currentLabels;
+    let metaSynced = null;
+    const token = target.page_token || fbToken;
+    const canSyncCustomLabel = Boolean(target.page_id && token && target.customer_psid);
+
+    setConversations(prev => prev.map(c => (
+      c.fb_conversation_id === fbConvId ? { ...c, is_starred: nextStarred } : c
+    )));
+    if (activeConversationRef.current?.fb_conversation_id === fbConvId) {
       setActiveConversation(prev => ({ ...prev, is_starred: nextStarred }));
     }
 
     const starredMap = getLocalMap(STARRED_MAP_KEY);
     starredMap[fbConvId] = nextStarred;
     saveLocalMap(STARRED_MAP_KEY, starredMap);
-  };
 
-  // 8. Toggle Unread
-  const handleToggleUnread = async (fbConvId) => {
-    const currentReadMap = getReadMap();
-    setConversations(prev => prev.map(c => {
-      if (c.fb_conversation_id === fbConvId) {
-        const nextUnread = c.unread_count > 0 ? 0 : 1;
-        if (nextUnread === 0) {
-          currentReadMap[fbConvId] = new Date().toISOString();
-        } else {
-          delete currentReadMap[fbConvId];
-        }
-        return { ...c, unread_count: nextUnread };
+    if (nextStarred) {
+      if (canSyncCustomLabel) {
+        const syncedLabel = await syncAssignPageLabel(
+          target.page_id,
+          token,
+          META_FOLLOWUP_LABEL,
+          target.customer_psid
+        );
+        metaSynced = Boolean(syncedLabel?.metaSynced);
+        if (metaSynced) nextLabels = mergeLabelsByName(currentLabels, [syncedLabel]);
       }
-      return c;
-    }));
-    saveReadMap(currentReadMap);
+    } else {
+      const assigned = currentLabels.find(label => hasLabelName([label], META_FOLLOWUP_LABEL.name));
+      if (canSyncCustomLabel && assigned?.source === 'meta') {
+        metaSynced = await syncUnassignPageLabel(
+          target.page_id,
+          token,
+          assigned.id,
+          target.customer_psid
+        );
+      }
+      nextLabels = currentLabels.filter(label => !hasLabelName([label], META_FOLLOWUP_LABEL.name));
+    }
+
+    if (nextLabels !== currentLabels) {
+      setConversations(prev => prev.map(c => (
+        c.fb_conversation_id === fbConvId ? { ...c, labels: nextLabels } : c
+      )));
+      if (activeConversationRef.current?.fb_conversation_id === fbConvId) {
+        setActiveConversation(prev => ({ ...prev, labels: nextLabels }));
+      }
+      localStorage.setItem(`metapost_labels_${fbConvId}`, JSON.stringify(nextLabels));
+      if (target.customer_psid) {
+        localStorage.setItem(`metapost_labels_${target.customer_psid}`, JSON.stringify(nextLabels));
+      }
+    }
+
+    return { localSaved: true, metaSynced };
   };
 
   // 9. Add / Remove Persistent Label (Syncs with LocalStorage & Meta Graph API)
   const handleAddLabel = async (label) => {
     if (!activeConversation) return;
     const currentLabels = activeConversation.labels || [];
-    if (currentLabels.some(l => l.id === label.id || l.name?.toLowerCase() === label.name?.toLowerCase())) return;
+    if (currentLabels.some(l => l.id === label.id || l.name?.toLowerCase() === label.name?.toLowerCase())) return { metaSynced: true };
 
-    const newLabels = [...currentLabels, label];
-    setActiveConversation(prev => ({ ...prev, labels: newLabels }));
-    setConversations(prev => prev.map(c => c.fb_conversation_id === activeConversation.fb_conversation_id ? { ...c, labels: newLabels } : c));
-
-    // Save to localStorage by BOTH conversation ID and customer PSID
-    localStorage.setItem(`metapost_labels_${activeConversation.fb_conversation_id}`, JSON.stringify(newLabels));
-    if (activeConversation.customer_psid) {
-      localStorage.setItem(`metapost_labels_${activeConversation.customer_psid}`, JSON.stringify(newLabels));
-    }
-
-    // Call smart Meta Facebook Graph API sync
-    syncAssignPageLabel(
+    const syncedLabel = await syncAssignPageLabel(
       activeConversation.page_id,
       activeConversation.page_token || fbToken,
       label,
       activeConversation.customer_psid
-    ).then(syncedLabel => {
-      if (syncedLabel?.id && syncedLabel.id !== label.id) {
-        const updated = newLabels.map(l => l.name === label.name ? syncedLabel : l);
-        localStorage.setItem(`metapost_labels_${activeConversation.fb_conversation_id}`, JSON.stringify(updated));
-        if (activeConversation.customer_psid) {
-          localStorage.setItem(`metapost_labels_${activeConversation.customer_psid}`, JSON.stringify(updated));
-        }
-        setActiveConversation(prev => prev ? { ...prev, labels: updated } : prev);
-      }
-    });
+    );
+    if (!syncedLabel?.metaSynced) throw new Error('Meta chưa xác nhận gắn nhãn nên web không lưu nhãn này.');
+
+    const newLabels = mergeLabelsByName(currentLabels, [syncedLabel]);
+    setActiveConversation(prev => prev ? { ...prev, labels: newLabels } : prev);
+    setConversations(prev => prev.map(c => c.fb_conversation_id === activeConversation.fb_conversation_id ? { ...c, labels: newLabels } : c));
+    localStorage.setItem(`metapost_labels_${activeConversation.fb_conversation_id}`, JSON.stringify(newLabels));
+    if (activeConversation.customer_psid) localStorage.setItem(`metapost_labels_${activeConversation.customer_psid}`, JSON.stringify(newLabels));
+    return { metaSynced: true };
   };
 
-  const handleRemoveLabel = (labelId) => {
+  const handleRemoveLabel = async (labelId) => {
     if (!activeConversation) return;
+    const assignedLabel = (activeConversation.labels || []).find(l => l.id === labelId || l.name === labelId);
+    if (!assignedLabel) return { metaSynced: true };
+    const metaSynced = await syncUnassignPageLabel(
+      activeConversation.page_id,
+      activeConversation.page_token || fbToken,
+      assignedLabel.id || assignedLabel.name,
+      activeConversation.customer_psid
+    );
+    if (!metaSynced) throw new Error('Meta chưa xác nhận gỡ nhãn nên web giữ nguyên nhãn hiện tại.');
+
     const newLabels = (activeConversation.labels || []).filter(l => l.id !== labelId && l.name !== labelId);
     setActiveConversation(prev => ({ ...prev, labels: newLabels }));
     setConversations(prev => prev.map(c => c.fb_conversation_id === activeConversation.fb_conversation_id ? { ...c, labels: newLabels } : c));
@@ -806,13 +1299,7 @@ function playChimeSound() {
       localStorage.setItem(`metapost_labels_${activeConversation.customer_psid}`, JSON.stringify(newLabels));
     }
 
-    // Call Meta Facebook Graph API unassign
-    syncUnassignPageLabel(
-      activeConversation.page_id,
-      activeConversation.page_token || fbToken,
-      labelId,
-      activeConversation.customer_psid
-    );
+    return { metaSynced: true };
   };
 
   // 10. Notes
@@ -857,8 +1344,19 @@ function playChimeSound() {
     try {
       savedCustomer = JSON.parse(localStorage.getItem(storageKey) || '{}');
     } catch {}
-    localStorage.setItem(storageKey, JSON.stringify({ ...savedCustomer, lead_stage: leadStage }));
-    setCustomerCRMData(prev => ({ ...prev, lead_stage: leadStage }));
+    const updatedAt = new Date().toISOString();
+    localStorage.setItem(storageKey, JSON.stringify({
+      ...savedCustomer,
+      lead_stage: leadStage,
+      lead_stage_source: 'manual',
+      lead_stage_updated_at: updatedAt
+    }));
+    setCustomerCRMData(prev => ({
+      ...prev,
+      lead_stage: leadStage,
+      lead_stage_source: 'manual',
+      lead_stage_updated_at: updatedAt
+    }));
   };
 
   // Scan unread across ALL pages (independent of selected page)
@@ -875,6 +1373,134 @@ function playChimeSound() {
     }
   }, [fbToken]);
 
+  // Monitor the newest conversations on every enabled Page independently of
+  // the Page currently open in the UI. This mirrors Meta's Page-separated
+  // notification behavior without replacing the visible conversation list.
+  const monitorAllPageNotifications = useCallback(async (allPages) => {
+    if (!fbToken || !Array.isArray(allPages) || allPages.length === 0) return;
+    if (notificationMonitorRunningRef.current) return;
+    notificationMonitorRunningRef.current = true;
+
+    try {
+      let pageNicknames = {};
+      try {
+        pageNicknames = JSON.parse(localStorage.getItem('metapost_page_nicknames') || '{}');
+      } catch {}
+      const pagesWithDisplayNames = allPages.map(page => ({
+        ...page,
+        notification_name: getPageDisplayName(page, allPages, pageNicknames)
+      }));
+      const results = await runWithCrossTabSyncLock(
+        'page-head-monitor',
+        () => runInChunks(
+          pagesWithDisplayNames,
+          page => fetchPageConversationHeads(
+            page.id,
+            page.notification_name || page.name,
+            page.access_token || fbToken,
+            10
+          ),
+          2,
+          250
+        )
+      );
+
+      if (!Array.isArray(results)) return;
+
+      results.forEach(result => {
+        if (result.status !== 'fulfilled' || !Array.isArray(result.value)) return;
+        result.value.forEach(head => {
+          const conversationKey = `${head.page_id}:${head.conversation_id}`;
+          const marker = head.message_id || `${head.message_created_at || ''}:${head.message_text || ''}`;
+          const previousMarker = notificationHeadsRef.current.get(conversationKey);
+          notificationHeadsRef.current.set(conversationKey, marker);
+
+          if (
+            previousMarker
+            && previousMarker !== marker
+            && head.sender_id
+            && head.sender_id !== head.page_id
+          ) {
+            triggerNewMessageNotification({
+              pageId: head.page_id,
+              pageName: head.page_name,
+              convId: head.conversation_id,
+              customerName: head.customer_name,
+              messageId: head.message_id || marker,
+              messageText: head.message_text,
+              avatarUrl: head.avatar_url,
+              playSound: true
+            });
+          }
+        });
+      });
+    } finally {
+      notificationMonitorRunningRef.current = false;
+    }
+  }, [fbToken]);
+
+  useEffect(() => {
+    if (!fbToken) return undefined;
+
+    let stopped = false;
+    let timer = null;
+    const scheduleNextMonitor = () => {
+      if (stopped) return;
+      clearTimeout(timer);
+      const delay = document.hidden ? BACKGROUND_SYNC_MS : FOREGROUND_OTHER_PAGES_SYNC_MS;
+      timer = setTimeout(runMonitor, delay);
+    };
+    const runMonitor = async () => {
+      if (!navigator.onLine) {
+        scheduleNextMonitor();
+        return;
+      }
+      if (!document.hidden && Date.now() - lastNotificationMonitorAtRef.current < FOREGROUND_EVENT_COOLDOWN_MS) {
+        scheduleNextMonitor();
+        return;
+      }
+      lastNotificationMonitorAtRef.current = Date.now();
+      try {
+        const cachedPages = JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]');
+        const currentVisible = JSON.parse(localStorage.getItem('metapost_visible_page_ids') || '[]');
+        const enabledPages = currentVisible.length > 0
+          ? cachedPages.filter(page => currentVisible.includes(page.id))
+          : cachedPages;
+        const currentSelectedPageId = localStorage.getItem('metapost_selected_page_id') || 'all';
+        // A lightweight Page-head scan keeps foreground notifications timely
+        // even when the full all-Page Inbox refresh is intentionally slower.
+        const pagesOutsideVisibleList = currentSelectedPageId === 'all'
+          ? enabledPages
+          : enabledPages.filter(page => page.id !== currentSelectedPageId);
+        if (pagesOutsideVisibleList.length > 0) {
+          await monitorAllPageNotifications(pagesOutsideVisibleList);
+        }
+      } catch {
+        // The next successful Page cache refresh will restore monitoring.
+      } finally {
+        scheduleNextMonitor();
+      }
+    };
+
+    // The selected Page is already refreshed by the visible Inbox request.
+    // Delay the first cross-Page fallback scan so opening/F5 never launches a
+    // second burst of Graph requests before the operator can use the screen.
+    scheduleNextMonitor();
+    const handleForegroundMonitor = () => {
+      if (!document.hidden) runMonitor();
+    };
+    window.addEventListener('focus', handleForegroundMonitor);
+    window.addEventListener('online', handleForegroundMonitor);
+    document.addEventListener('visibilitychange', handleForegroundMonitor);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      window.removeEventListener('focus', handleForegroundMonitor);
+      window.removeEventListener('online', handleForegroundMonitor);
+      document.removeEventListener('visibilitychange', handleForegroundMonitor);
+    };
+  }, [fbToken, monitorAllPageNotifications]);
+
   // Handle clicking a page in the unread banner
   const handleUnreadPageClick = (pageId) => {
     if (pageId === 'all') {
@@ -888,30 +1514,105 @@ function playChimeSound() {
     loadAllConversations();
   };
 
-  // Mark ALL conversations as read
-  const handleMarkAllAsRead = () => {
-    const nowIso = new Date().toISOString();
-    const currentReadMap = getReadMap();
-    conversations.forEach(c => {
-      currentReadMap[c.fb_conversation_id] = nowIso;
+  // Mark only loaded, eligible unread conversations. Each item must be
+  // confirmed by Meta and still point at the same latest message before the UI
+  // clears it. Unloaded Pages and messages arriving during the request remain.
+  const handleMarkAllAsRead = async () => {
+    if (isMarkingRead) return;
+    setIsMarkingRead(true);
+    setReadActionNotice(null);
+    const unreadSnapshot = conversationsRef.current.filter(conversation => Number(conversation.unread_count || 0) > 0);
+    const eligible = unreadSnapshot.filter(canMarkConversationSeen);
+    const candidates = eligible.map(createReadCandidate);
+
+    if (candidates.length === 0) {
+      setUnreadSummary(prev => prev ? {
+        ...prev,
+        readNotice: {
+          tone: 'warning',
+          text: unreadSnapshot.length > 0
+            ? 'Các tin đang tải chưa đủ điều kiện để Meta xác nhận đã đọc.'
+            : 'Không có tin chưa đọc trong danh sách đang tải.'
+        }
+      } : prev);
+      setReadActionNotice({
+        tone: 'warning',
+        text: unreadSnapshot.length > 0
+          ? `Meta chưa cho app đánh dấu ${unreadSnapshot.length} tin này là đã đọc (thường do tin đã quá thời hạn xử lý hoặc thiếu thông tin người gửi). Dấu mới vẫn được giữ nguyên.`
+          : 'Không có tin chưa đọc trong danh sách đang tải.'
+      });
+      setIsMarkingRead(false);
+      return;
+    }
+
+    const eligibleIds = new Set(candidates.map(candidate => candidate.conversationId));
+    setConversations(prev => {
+      const next = prev.map(conversation => (
+        eligibleIds.has(String(conversation.fb_conversation_id))
+          ? { ...conversation, read_sync_state: 'pending' }
+          : conversation
+      ));
+      conversationsRef.current = next;
+      return next;
     });
-    saveReadMap(currentReadMap);
 
-    // Reset all unread_count to 0
-    setConversations(prev => prev.map(c => ({ ...c, unread_count: 0 })));
-
-    // Reset unread summary
+    const results = await runInChunks(
+      eligible,
+      conversation => markConversationAsRead(
+        conversation.customer_psid,
+        conversation.page_token || fbToken,
+        conversation.fb_conversation_id
+      ),
+      3,
+      100
+    );
+    const confirmed = collectConfirmedReadCandidates(candidates, results);
+    const applied = filterCurrentReadCandidates(conversationsRef.current, confirmed);
+    const confirmedIds = new Set(applied.map(candidate => candidate.conversationId));
+    const nextConversations = applyConfirmedReadsToConversations(
+      conversationsRef.current.map(conversation => (
+        eligibleIds.has(String(conversation.fb_conversation_id))
+        && !confirmedIds.has(String(conversation.fb_conversation_id))
+          ? { ...conversation, read_sync_state: 'unconfirmed' }
+          : conversation
+      )),
+      applied
+    );
+    persistConfirmedReadsToInboxCaches(localStorage, applied);
+    conversationsRef.current = nextConversations;
+    setConversations(nextConversations);
     setUnreadSummary(prev => {
-      if (!prev) return prev;
+      const updated = applyConfirmedReadsToSummary(prev, applied);
+      if (!updated) return updated;
+      const unconfirmedCount = candidates.length - confirmed.length;
+      const changedDuringSync = confirmed.length - applied.length;
+      const skippedCount = unreadSnapshot.length - candidates.length;
       return {
-        total: 0,
-        perPage: prev.perPage.map(p => ({ ...p, unreadCount: 0 }))
+        ...updated,
+        readNotice: {
+          tone: unconfirmedCount || changedDuringSync || skippedCount ? 'warning' : 'success',
+          text: `Meta xác nhận ${applied.length}/${unreadSnapshot.length} tin đang tải.${
+            changedDuringSync ? ` Giữ lại ${changedDuringSync} tin đã có cập nhật mới.` : ''
+          }${unconfirmedCount || skippedCount ? ' Các tin còn lại chưa được Meta xác nhận nên vẫn giữ dấu mới, kể cả sau F5.' : ''}`
+        }
       };
     });
+    const unconfirmedCount = candidates.length - confirmed.length;
+    const changedDuringSync = confirmed.length - applied.length;
+    const skippedCount = unreadSnapshot.length - candidates.length;
+    setReadActionNotice({
+      tone: unconfirmedCount || changedDuringSync || skippedCount ? 'warning' : 'success',
+      text: `Meta xác nhận ${applied.length}/${unreadSnapshot.length} tin đang tải.${
+        changedDuringSync ? ` Giữ lại ${changedDuringSync} tin đã có cập nhật mới.` : ''
+      }${unconfirmedCount || skippedCount ? ' Các tin còn lại chưa được Meta xác nhận nên vẫn giữ dấu mới, kể cả sau F5.' : ''}`
+    });
+    setIsMarkingRead(false);
   };
 
   // Initial Boot
   useEffect(() => {
+    let stopped = false;
+    let timer = null;
     loadLabelsAndTags();
     loadPages(false).then(loadedPages => {
       const pagesToUse = loadedPages && loadedPages.length > 0 ? loadedPages : pages;
@@ -923,9 +1624,26 @@ function playChimeSound() {
       }
     });
 
-    // Fast background polling: check conversations every 15s
-    const timer = setInterval(() => {
-      if (fbToken) {
+    // Adaptive list polling. A single selected Page stays responsive while the
+    // expensive all-Page view refreshes less often. Cross-tab locking prevents
+    // every open tab/shortcut from repeating the same Graph requests.
+    const scheduleNextListSync = () => {
+      if (stopped) return;
+      clearTimeout(timer);
+      const currentSelectedPageId = localStorage.getItem('metapost_selected_page_id') || 'all';
+      const delay = document.hidden
+        ? BACKGROUND_SYNC_MS
+        : currentSelectedPageId === 'all'
+          ? FOREGROUND_ALL_PAGES_SYNC_MS
+          : FOREGROUND_SELECTED_PAGE_SYNC_MS;
+      timer = setTimeout(runListSync, delay);
+    };
+    const runListSync = async () => {
+      if (!document.hidden && Date.now() - lastListSyncAtRef.current < FOREGROUND_EVENT_COOLDOWN_MS) {
+        scheduleNextListSync();
+        return;
+      }
+      if (fbToken && navigator.onLine) {
         try {
           const cachedPages = JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]');
           if (cachedPages.length > 0) {
@@ -933,28 +1651,51 @@ function playChimeSound() {
             const active = currentVisible.length > 0
               ? cachedPages.filter(p => currentVisible.includes(p.id))
               : cachedPages;
-            loadAllConversations(active, true);
+            const currentSelectedPageId = localStorage.getItem('metapost_selected_page_id') || 'all';
+            const targetPages = currentSelectedPageId === 'all'
+              ? active
+              : active.filter(page => page.id === currentSelectedPageId);
+            lastListSyncAtRef.current = Date.now();
+            await runWithCrossTabSyncLock(
+              `conversation-list-${currentSelectedPageId}`,
+              () => loadAllConversations(targetPages, true)
+            );
           }
         } catch {
-          localStorage.removeItem('metapost_pages_cache');
-          localStorage.removeItem('metapost_visible_page_ids');
+          // Transient network/storage errors must not erase Page preferences.
         }
       }
-    }, 15000);
+      scheduleNextListSync();
+    };
 
-    return () => clearInterval(timer);
+    const handleForegroundListSync = () => {
+      if (!document.hidden) runListSync();
+    };
+    scheduleNextListSync();
+    window.addEventListener('focus', handleForegroundListSync);
+    window.addEventListener('online', handleForegroundListSync);
+    document.addEventListener('visibilitychange', handleForegroundListSync);
+
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      window.removeEventListener('focus', handleForegroundListSync);
+      window.removeEventListener('online', handleForegroundListSync);
+      document.removeEventListener('visibilitychange', handleForegroundListSync);
+    };
   }, [fbToken]);
 
   return (
-    <div className="flex-1 flex overflow-hidden h-full h-[calc(100dvh-60px)] relative">
+    <div className="flex-1 min-h-0 flex overflow-hidden relative">
       {/* 1. Left Sidebar: Channels & Filtered Conversations (hidden on mobile if chat is open) */}
-      <div className={`w-full md:w-80 lg:w-96 flex-shrink-0 flex flex-col ${mobileView === 'chat' ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`w-full min-h-0 md:w-80 lg:w-96 flex-shrink-0 flex flex-col ${mobileView === 'chat' ? 'hidden md:flex' : 'flex'}`}>
         {/* Global Unread Dashboard Banner */}
         <UnreadBanner
           unreadSummary={unreadSummary}
           isScanning={isUnreadScanning}
           onPageClick={handleUnreadPageClick}
           onMarkAllAsRead={handleMarkAllAsRead}
+          isMarkingRead={isMarkingRead}
         />
         <ConversationSidebar
           pages={activePages.length > 0 ? activePages : pages}
@@ -964,6 +1705,7 @@ function playChimeSound() {
           selectedPageId={selectedPageId}
           onSelectPage={(pageId) => {
             setSelectedPageId(pageId);
+            setConversationLoadError(null);
             localStorage.setItem('metapost_selected_page_id', pageId);
             const targetPages = pageId === 'all'
               ? (activePages.length > 0 ? activePages : pages)
@@ -999,28 +1741,29 @@ function playChimeSound() {
           onRefresh={() => loadAllConversations(activePages.length > 0 ? activePages : pages)}
           isLoading={isLoadingConversations}
           onMarkAllAsRead={handleMarkAllAsRead}
+          isMarkingRead={isMarkingRead}
+          readActionNotice={readActionNotice}
           onOpenTokenModal={onOpenTokenModal}
           onLoadMore={handleLoadMoreConversations}
           isLoadingMore={isLoadingMore}
           hasMore={hasMoreOlder}
+          loadError={conversationLoadError}
         />
       </div>
 
       {/* 2. Middle: Chat Thread (Fullscreen on Mobile, standard column on Desktop) */}
-      <div className={`flex-1 flex flex-col min-w-0 ${mobileView === 'list' ? 'hidden md:flex' : 'fixed inset-0 z-40 bg-white dark:bg-slate-950 flex flex-col md:relative md:inset-auto md:z-auto md:flex'}`}>
+        <div className={`flex-1 min-h-0 overflow-hidden flex flex-col min-w-0 ${mobileView === 'list' ? 'hidden md:flex' : 'fixed inset-0 z-40 bg-white dark:bg-slate-950 flex flex-col md:relative md:inset-auto md:z-auto md:flex'}`}>
         <ChatThread
           conversation={activeConversation}
           messages={messages}
           isLoadingMessages={isLoadingMessages}
+          messageLoadError={messageLoadError}
+          onRetryMessages={() => activeConversation && handleSelectConversation(activeConversation, false)}
           onSendMessage={handleSendMessage}
           onUpdateStatus={handleUpdateStatus}
           onToggleStar={handleToggleStar}
-          onToggleUnread={handleToggleUnread}
           onOpenMediaModal={setActiveMediaModal}
-          onBackToList={() => {
-            setMobileView('list');
-            localStorage.removeItem('metapost_active_conv_id');
-          }}
+          onBackToList={returnToMobileConversationList}
           onToggleProfilePanel={() => setIsProfilePanelOpenOnMobile(!isProfilePanelOpenOnMobile)}
           quickReplies={quickReplies}
           onOpenQuickRepliesModal={() => setIsQuickRepliesOpen(true)}
@@ -1034,14 +1777,14 @@ function playChimeSound() {
       {/* 3. Right: Meta Business CRM Profile Panel (Desktop: side column, Mobile: slide-over drawer) */}
       {activeConversation && (
         <div className={`
-          ${isProfilePanelOpenOnMobile ? 'fixed inset-y-0 right-0 z-40 w-80 shadow-2xl flex flex-col bg-white dark:bg-slate-900 animate-in slide-in-from-right duration-200' : 'hidden xl:flex w-80 lg:w-88 flex-shrink-0 flex-col'}
+          ${isProfilePanelOpenOnMobile ? 'fixed inset-0 z-50 w-full sm:inset-y-0 sm:left-auto sm:right-0 sm:w-96 shadow-2xl flex flex-col bg-white dark:bg-slate-900 animate-in slide-in-from-right duration-200' : 'hidden xl:flex w-80 lg:w-88 flex-shrink-0 flex-col'}
         `}>
           {isProfilePanelOpenOnMobile && (
-            <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between xl:hidden">
+            <div className="sticky top-0 z-10 px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur flex items-center justify-between xl:hidden">
               <span className="font-bold text-sm">Hồ sơ khách hàng</span>
               <button
                 onClick={() => setIsProfilePanelOpenOnMobile(false)}
-                className="px-3 py-1 text-xs font-bold rounded-lg bg-slate-100 dark:bg-slate-800"
+                className="min-h-10 px-3 py-2 text-xs font-bold rounded-xl bg-slate-100 dark:bg-slate-800"
               >
                 ✕ Đóng
               </button>
@@ -1069,7 +1812,7 @@ function playChimeSound() {
       {isProfilePanelOpenOnMobile && (
         <div
           onClick={() => setIsProfilePanelOpenOnMobile(false)}
-          className="fixed inset-0 bg-black/40 z-30 xl:hidden"
+          className="fixed inset-0 bg-black/40 z-40 xl:hidden"
         />
       )}
 
@@ -1131,6 +1874,9 @@ function playChimeSound() {
           onSaveVisiblePages={(newIds) => {
             setVisiblePageIds(newIds);
             localStorage.setItem('metapost_visible_page_ids', JSON.stringify(newIds));
+            window.dispatchEvent(new CustomEvent(PUSH_PAGE_SELECTION_CHANGED_EVENT, {
+              detail: { pageIds: newIds }
+            }));
           }}
           onClose={() => setIsPageManagerOpen(false)}
         />

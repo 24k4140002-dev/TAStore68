@@ -111,6 +111,8 @@
 
 .conversation-card-layer {
   contain: layout style paint;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 82px;
 }
 
 /* Chat bubbles */

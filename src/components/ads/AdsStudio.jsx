@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   TrendingUp,
   DollarSign,
@@ -38,6 +38,8 @@ import {
   toggleCampaignStatus,
   updateCampaignBudget
 } from '../../services/facebookApi';
+import { formatAccountCurrency, fromMetaBudget, parseBudgetInput } from '../../utils/adsMoney';
+import { resolveAdsDashboardSections } from '../../services/adsDashboardState';
 
 const DATE_PRESETS = [
   { id: 'today', label: 'Hôm nay' },
@@ -46,11 +48,6 @@ const DATE_PRESETS = [
   { id: 'this_month', label: 'Tháng này' },
   { id: 'last_30d', label: '30 ngày qua' }
 ];
-
-function formatVnd(val) {
-  if (!val && val !== 0) return '0 ₫';
-  return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(val);
-}
 
 function formatNumber(val) {
   if (!val && val !== 0) return '0';
@@ -78,22 +75,27 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
   const [editingBudgetId, setEditingBudgetId] = useState(null);
   const [editBudgetValue, setEditBudgetValue] = useState('');
   const [isUpdatingBudget, setIsUpdatingBudget] = useState(false);
+  const [statusUpdatingId, setStatusUpdatingId] = useState(null);
+  const dashboardRequestRef = useRef(0);
 
   // Campaign Ads Creative Drill-down
   const [expandedCampaignId, setExpandedCampaignId] = useState(null);
   const [campaignAdsMap, setCampaignAdsMap] = useState({});
+  const [campaignAdsErrors, setCampaignAdsErrors] = useState({});
   const [loadingAdsId, setLoadingAdsId] = useState(null);
 
   // Smart Anti-Loss Auto Rules State
   const [isRuleModalOpen, setIsRuleModalOpen] = useState(false);
   const [ruleConfig, setRuleConfig] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem('metapost_ads_rule_config') || 'null') || {
-        enabled: true,
-        maxSpendZeroMsg: 100000, // 100k spend with 0 msg -> Alert
-        maxCostPerMsg: 45000,    // > 45k / msg -> Alert
-        minSpendToEvaluateCost: 50000,
-        autoPause: false         // true: auto pause, false: flag alert only
+      const stored = JSON.parse(localStorage.getItem('metapost_ads_rule_config') || 'null');
+      return {
+        ...(stored || {}),
+        enabled: stored?.enabled ?? true,
+        maxSpendZeroMsg: stored?.maxSpendZeroMsg ?? 100000,
+        maxCostPerMsg: stored?.maxCostPerMsg ?? 45000,
+        minSpendToEvaluateCost: stored?.minSpendToEvaluateCost ?? 50000,
+        autoPause: false
       };
     } catch {
       return {
@@ -107,8 +109,9 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
   });
 
   const saveRuleConfig = (newCfg) => {
-    setRuleConfig(newCfg);
-    localStorage.setItem('metapost_ads_rule_config', JSON.stringify(newCfg));
+    const safeConfig = { ...newCfg, autoPause: false };
+    setRuleConfig(safeConfig);
+    localStorage.setItem('metapost_ads_rule_config', JSON.stringify(safeConfig));
     setIsRuleModalOpen(false);
   };
 
@@ -150,55 +153,43 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
   // 2. Fetch Insights, Daily Trend & Campaigns
   const loadDashboardData = useCallback(async () => {
     if (!fbToken || !selectedAccountId) return;
+    const requestId = ++dashboardRequestRef.current;
+    const accountCurrency = adAccounts.find(account => account.id === selectedAccountId)?.currency || 'VND';
     setIsLoading(true);
     setErrorMsg(null);
+    // Never display figures from the previous account/period under a newly
+    // selected filter. Successful sections refill independently below.
+    setAccountInsights(null);
+    setDailyInsights([]);
+    setCampaigns([]);
 
     try {
       const [insightsRes, dailyRes, campaignsRes] = await Promise.all([
         fetchAdAccountInsights(selectedAccountId, fbToken, datePreset),
         fetchDailyAccountInsights(selectedAccountId, fbToken, datePreset === 'today' ? 'last_7d' : datePreset),
-        fetchCampaignsWithInsights(selectedAccountId, fbToken, datePreset)
+        fetchCampaignsWithInsights(selectedAccountId, fbToken, datePreset, accountCurrency)
       ]);
 
-      if (insightsRes?.error) {
-        setErrorMsg(insightsRes.error.message);
-      } else {
-        setAccountInsights(insightsRes);
-      }
+      if (requestId !== dashboardRequestRef.current) return;
 
-      if (Array.isArray(dailyRes)) {
-        setDailyInsights(dailyRes);
-      }
-
-      if (campaignsRes?.error) {
-        console.warn('Campaigns error:', campaignsRes.error);
-      } else if (Array.isArray(campaignsRes)) {
-        setCampaigns(campaignsRes);
-
-        // Run Smart Anti-Loss Auto Rules if autoPause is enabled
-        if (ruleConfig.enabled && ruleConfig.autoPause) {
-          campaignsRes.forEach(async (camp) => {
-            if (camp.status === 'ACTIVE') {
-              const isZeroMsgLeak = camp.spend >= ruleConfig.maxSpendZeroMsg && camp.messagingCount === 0;
-              const isExpensiveLeak = camp.spend >= ruleConfig.minSpendToEvaluateCost && camp.costPerMessage >= ruleConfig.maxCostPerMsg;
-              if (isZeroMsgLeak || isExpensiveLeak) {
-                try {
-                  await toggleCampaignStatus(camp.id, 'PAUSED', fbToken);
-                  setCampaigns(prev => prev.map(c => c.id === camp.id ? { ...c, status: 'PAUSED', autoPausedReason: isZeroMsgLeak ? 'Cháy tiền 0 tin nhắn' : 'Giá tin nhắn quá đắt' } : c));
-                } catch (e) {
-                  console.warn('Auto pause error:', e);
-                }
-              }
-            }
-          });
-        }
-      }
+      const resolved = resolveAdsDashboardSections({ insightsRes, dailyRes, campaignsRes });
+      setAccountInsights(resolved.accountInsights);
+      setDailyInsights(resolved.dailyInsights);
+      setCampaigns(resolved.campaigns);
+      setErrorMsg(resolved.errors.length > 0
+        ? `Không tải được: ${resolved.errors.map(item => item.section).join(', ')}. Dữ liệu cũ đã được ẩn để tránh nhầm khoảng thời gian.`
+        : null);
     } catch (err) {
-      setErrorMsg('Không thể tải chỉ số quảng cáo.');
+      if (requestId === dashboardRequestRef.current) {
+        setAccountInsights(null);
+        setDailyInsights([]);
+        setCampaigns([]);
+        setErrorMsg('Không thể tải chỉ số quảng cáo. Dữ liệu cũ đã được ẩn để tránh nhầm khoảng thời gian.');
+      }
     } finally {
-      setIsLoading(false);
+      if (requestId === dashboardRequestRef.current) setIsLoading(false);
     }
-  }, [fbToken, selectedAccountId, datePreset, ruleConfig]);
+  }, [fbToken, selectedAccountId, datePreset, adAccounts]);
 
   useEffect(() => {
     if (selectedAccountId) {
@@ -206,39 +197,59 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
     }
   }, [selectedAccountId, datePreset, loadDashboardData]);
 
+  useEffect(() => {
+    setExpandedCampaignId(null);
+    setCampaignAdsMap({});
+    setCampaignAdsErrors({});
+  }, [selectedAccountId, datePreset]);
+
   // Handle Ad Account Change
   const handleAccountChange = (accId) => {
+    dashboardRequestRef.current += 1;
     setSelectedAccountId(accId);
     localStorage.setItem('metapost_selected_ad_acc', accId);
     setExpandedCampaignId(null);
+    setCampaignAdsMap({});
+    setCampaignAdsErrors({});
+    setCampaigns([]);
+    setAccountInsights(null);
+    setDailyInsights([]);
   };
 
   // Handle Toggle Campaign Active / Paused
   const handleToggleStatus = async (campaign) => {
     const nextStatus = campaign.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
-    // Optimistic UI update
-    setCampaigns(prev => prev.map(c => c.id === campaign.id ? { ...c, status: nextStatus, autoPausedReason: null } : c));
+    const verb = nextStatus === 'ACTIVE' ? 'BẬT LẠI' : 'TẠM DỪNG';
+    if (!window.confirm(`${verb} chiến dịch “${campaign.name}”? Thay đổi này sẽ đồng bộ trực tiếp lên Meta.`)) return;
 
+    setStatusUpdatingId(campaign.id);
     try {
       await toggleCampaignStatus(campaign.id, nextStatus, fbToken);
+      setCampaigns(prev => prev.map(c => c.id === campaign.id ? { ...c, status: nextStatus } : c));
     } catch (err) {
       alert(`Lỗi khi ${nextStatus === 'ACTIVE' ? 'bật' : 'tắt'} chiến dịch: ${err.message}`);
-      // Revert on error
-      setCampaigns(prev => prev.map(c => c.id === campaign.id ? { ...c, status: campaign.status } : c));
+    } finally {
+      setStatusUpdatingId(null);
     }
   };
 
   // Handle Save Budget
   const handleSaveBudget = async (campaignId) => {
-    const num = parseInt(editBudgetValue.replace(/\D/g, ''), 10);
-    if (!num || num < 20000) {
-      alert('Ngân sách tối thiểu là 20.000 ₫/ngày');
+    const selectedAccount = adAccounts.find(account => account.id === selectedAccountId);
+    const currency = selectedAccount?.currency || 'VND';
+    const num = parseBudgetInput(editBudgetValue, currency);
+    const accountMinimum = fromMetaBudget(selectedAccount?.min_daily_budget, currency);
+    const minimum = accountMinimum || (currency === 'VND' ? 20000 : 1);
+    if (!num || num < minimum) {
+      alert(`Ngân sách tối thiểu là ${formatAccountCurrency(minimum, currency)}/ngày`);
       return;
     }
+    const campaign = campaigns.find(item => item.id === campaignId);
+    if (!window.confirm(`Đổi ngân sách “${campaign?.name || campaignId}” thành ${formatAccountCurrency(num, currency)}/ngày?`)) return;
 
     setIsUpdatingBudget(true);
     try {
-      await updateCampaignBudget(campaignId, num, fbToken);
+      await updateCampaignBudget(campaignId, num, fbToken, currency);
       setCampaigns(prev => prev.map(c => c.id === campaignId ? { ...c, daily_budget: num } : c));
       setEditingBudgetId(null);
     } catch (err) {
@@ -258,13 +269,19 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
     setExpandedCampaignId(campaignId);
     if (!campaignAdsMap[campaignId]) {
       setLoadingAdsId(campaignId);
+      setCampaignAdsErrors(prev => ({ ...prev, [campaignId]: '' }));
       try {
         const adsList = await fetchCampaignAds(campaignId, fbToken, datePreset);
         if (Array.isArray(adsList)) {
           setCampaignAdsMap(prev => ({ ...prev, [campaignId]: adsList }));
+        } else {
+          setCampaignAdsErrors(prev => ({
+            ...prev,
+            [campaignId]: adsList?.error?.message || 'Meta chưa trả được danh sách bài quảng cáo.'
+          }));
         }
       } catch (e) {
-        console.warn('Load ads error:', e);
+        setCampaignAdsErrors(prev => ({ ...prev, [campaignId]: 'Không tải được bài quảng cáo. Hãy thử lại.' }));
       } finally {
         setLoadingAdsId(null);
       }
@@ -272,27 +289,34 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
   };
 
   // Evaluate Campaign Alert Status
+  const selectedAccount = adAccounts.find(a => a.id === selectedAccountId);
+  const accountCurrency = selectedAccount?.currency || 'VND';
+  const rulesAvailable = selectedAccount?.currency === 'VND';
+  const effectiveErrorMsg = errorMsg || (!fbToken
+    ? 'Chưa có Facebook Token. Hãy nhập Token có quyền ads_read để xem số liệu; cần ads_management nếu muốn đổi trạng thái hoặc ngân sách.'
+    : null);
+  const getCostTone = (value) => {
+    if (!rulesAvailable) return 'text-slate-900 dark:text-white';
+    if (value > 0 && value <= 25000) return 'text-emerald-600 dark:text-emerald-400';
+    if (value <= 45000) return 'text-amber-600 dark:text-amber-400';
+    return 'text-rose-600 dark:text-rose-400';
+  };
+
   const getCampaignAlert = (camp) => {
-    if (!ruleConfig.enabled) return null;
+    if (!ruleConfig.enabled || !rulesAvailable) return null;
     if (camp.status === 'ACTIVE') {
       if (camp.spend >= ruleConfig.maxSpendZeroMsg && camp.messagingCount === 0) {
         return {
           type: 'danger',
-          label: `🚨 Cháy ${formatVnd(camp.spend)} chưa có tin nhắn nào!`
+          label: `🚨 Đã tiêu ${formatAccountCurrency(camp.spend, accountCurrency)} chưa có tin nhắn nào!`
         };
       }
       if (camp.spend >= ruleConfig.minSpendToEvaluateCost && camp.costPerMessage >= ruleConfig.maxCostPerMsg) {
         return {
           type: 'warning',
-          label: `⚠️ Giá đắt (${formatVnd(camp.costPerMessage)}/mess > ${formatVnd(ruleConfig.maxCostPerMsg)})`
+          label: `⚠️ Giá cao (${formatAccountCurrency(camp.costPerMessage, accountCurrency)}/mess > ${formatAccountCurrency(ruleConfig.maxCostPerMsg, 'VND')})`
         };
       }
-    }
-    if (camp.autoPausedReason) {
-      return {
-        type: 'danger',
-        label: `🛑 Đã tự động ngắt: ${camp.autoPausedReason}`
-      };
     }
     return null;
   };
@@ -311,14 +335,12 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
       }
       return true;
     });
-  }, [campaigns, statusFilter, searchQuery, ruleConfig]);
-
-  const selectedAccount = adAccounts.find(a => a.id === selectedAccountId);
+  }, [campaigns, statusFilter, searchQuery, ruleConfig, accountCurrency]);
 
   // Maximum spend for daily chart scaling
   const maxDailySpend = useMemo(() => {
     if (dailyInsights.length === 0) return 1;
-    return Math.max(...dailyInsights.map(d => d.spend), 10000);
+    return Math.max(...dailyInsights.map(d => d.spend), 1);
   }, [dailyInsights]);
 
   return (
@@ -379,13 +401,16 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
 
           {/* Anti-Loss Rule Trigger Button */}
           <button
-            onClick={() => setIsRuleModalOpen(true)}
+            onClick={() => rulesAvailable && setIsRuleModalOpen(true)}
+            disabled={!rulesAvailable}
             className={`px-2.5 sm:px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-smooth ${
-              ruleConfig.enabled
+              !rulesAvailable
+                ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400 dark:border-slate-700 dark:bg-slate-800'
+                : ruleConfig.enabled
                 ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-600 dark:text-rose-400 hover:bg-rose-100'
                 : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
             }`}
-            title="Cấu hình Quy tắc Chống Cháy Tài Khoản / Chặn Lỗ"
+            title={rulesAvailable ? 'Cấu hình ngưỡng cảnh báo chi tiêu' : 'Ngưỡng cảnh báo hiện chỉ áp dụng cho tài khoản VND'}
           >
             <ShieldAlert className="w-3.5 h-3.5 text-rose-500" />
             <span className="hidden sm:inline">Chặn Lỗ</span>
@@ -406,12 +431,12 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
       </div>
 
       {/* 2. Error / Permission Notice Banner */}
-      {errorMsg && (
+      {effectiveErrorMsg && (
         <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 flex items-start gap-3 text-amber-800 dark:text-amber-300 animate-in fade-in">
           <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
           <div className="flex-1 text-xs">
-            <h4 className="font-bold text-sm mb-1 text-amber-900 dark:text-amber-200">Cần quyền đọc Tài khoản Quảng cáo (`ads_read`)</h4>
-            <p className="leading-relaxed mb-2">{errorMsg}</p>
+            <h4 className="font-bold text-sm mb-1 text-amber-900 dark:text-amber-200">Cần quyền đọc Tài khoản Quảng cáo (ads_read)</h4>
+            <p className="leading-relaxed mb-2">{effectiveErrorMsg}</p>
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 onClick={onOpenTokenModal}
@@ -446,7 +471,7 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
             </div>
           </div>
           <div className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
-            {formatVnd(accountInsights?.spend || 0)}
+            {formatAccountCurrency(accountInsights?.spend || 0, accountCurrency)}
           </div>
           <p className="text-[11px] text-slate-400 font-medium">
             {DATE_PRESETS.find(p => p.id === datePreset)?.label}
@@ -482,14 +507,8 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
               <TrendingUp className="w-4 h-4" />
             </div>
           </div>
-          <div className={`text-xl sm:text-2xl font-black tracking-tight ${
-            (accountInsights?.costPerMessage || 0) <= 25000 && (accountInsights?.costPerMessage || 0) > 0
-              ? 'text-emerald-600 dark:text-emerald-400'
-              : (accountInsights?.costPerMessage || 0) <= 45000
-              ? 'text-amber-600 dark:text-amber-400'
-              : 'text-rose-600 dark:text-rose-400'
-          }`}>
-            {formatVnd(accountInsights?.costPerMessage || 0)}
+          <div className={`text-xl sm:text-2xl font-black tracking-tight ${getCostTone(accountInsights?.costPerMessage || 0)}`}>
+            {formatAccountCurrency(accountInsights?.costPerMessage || 0, accountCurrency)}
           </div>
           <p className="text-[11px] text-slate-400 font-medium">
             {accountInsights?.costPerMessage ? 'Giá trung bình mỗi cuộc trò chuyện' : 'Chưa có dữ liệu tin nhắn'}
@@ -511,7 +530,7 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
             <span className="text-xs font-semibold text-slate-400">/ {formatNumber(accountInsights?.impressions || 0)} views</span>
           </div>
           <p className="text-[11px] text-slate-400 font-medium">
-            CTR: {accountInsights?.ctr?.toFixed(2) || '0.00'}% • CPM: {formatVnd(accountInsights?.cpm || 0)}
+            CTR: {accountInsights?.ctr?.toFixed(2) || '0.00'}% • CPM: {formatAccountCurrency(accountInsights?.cpm || 0, accountCurrency)}
           </p>
         </div>
       </div>
@@ -541,7 +560,7 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
                 <div key={idx} className="flex flex-col items-center gap-1.5 group">
                   {/* Tooltip on Hover / Focus */}
                   <div className="text-[10px] text-slate-400 font-bold opacity-0 group-hover:opacity-100 transition-opacity text-center whitespace-nowrap">
-                    {formatVnd(day.spend)}
+                    {formatAccountCurrency(day.spend, accountCurrency)}
                   </div>
 
                   {/* Vertical Bar */}
@@ -665,8 +684,10 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
                           <button
                             type="button"
                             onClick={() => handleToggleStatus(camp)}
+                            disabled={statusUpdatingId !== null}
                             className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
                               isActive ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700'
+                            } ${statusUpdatingId !== null ? 'cursor-wait opacity-60' : ''
                             }`}
                             title={isActive ? 'Bấm để Tạm dừng' : 'Bấm để Bật chạy'}
                           >
@@ -741,7 +762,11 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
                           ) : (
                             <div className="flex items-center gap-1.5 group">
                               <span className="font-bold text-slate-700 dark:text-slate-200">
-                                {camp.daily_budget ? formatVnd(camp.daily_budget) : 'Trọn đời'}
+                                {camp.daily_budget
+                                  ? formatAccountCurrency(camp.daily_budget, accountCurrency)
+                                  : camp.lifetime_budget
+                                    ? `Trọn đời: ${formatAccountCurrency(camp.lifetime_budget, accountCurrency)}`
+                                    : 'Theo nhóm quảng cáo'}
                               </span>
                               {camp.daily_budget && (
                                 <button
@@ -761,7 +786,7 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
 
                         {/* Spend */}
                         <td className="py-3.5 px-3 sm:px-4 text-right font-bold text-slate-900 dark:text-white whitespace-nowrap">
-                          {formatVnd(camp.spend)}
+                          {formatAccountCurrency(camp.spend, accountCurrency)}
                         </td>
 
                         {/* Messages Count */}
@@ -778,14 +803,8 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
                         {/* Cost per Message */}
                         <td className="py-3.5 px-3 sm:px-4 text-right whitespace-nowrap">
                           {camp.costPerMessage > 0 ? (
-                            <span className={`font-black text-xs ${
-                              camp.costPerMessage <= 25000
-                                ? 'text-emerald-600 dark:text-emerald-400'
-                                : camp.costPerMessage <= 45000
-                                ? 'text-amber-600 dark:text-amber-400'
-                                : 'text-rose-600 dark:text-rose-400'
-                            }`}>
-                              {formatVnd(camp.costPerMessage)}
+                            <span className={`font-black text-xs ${getCostTone(camp.costPerMessage)}`}>
+                              {formatAccountCurrency(camp.costPerMessage, accountCurrency)}
                             </span>
                           ) : (
                             <span className="text-slate-400 font-medium">-</span>
@@ -818,6 +837,10 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
                                   <span className="w-3.5 h-3.5 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></span>
                                   <span>Đang nạp dữ liệu bài viết quảng cáo...</span>
                                 </div>
+                              ) : campaignAdsErrors[camp.id] ? (
+                                <p className="text-xs text-amber-700 dark:text-amber-300 py-2">
+                                  {campaignAdsErrors[camp.id]}
+                                </p>
                               ) : adsList.length === 0 ? (
                                 <p className="text-xs text-slate-400 py-2">Không tìm thấy bài viết quảng cáo nào trong chiến dịch này.</p>
                               ) : (
@@ -847,14 +870,14 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
                                         </p>
                                         <div className="flex items-center gap-2 mt-1.5 text-[11px] font-bold">
                                           <span className="text-slate-700 dark:text-slate-200">
-                                            💸 {formatVnd(ad.spend)}
+                                            💸 {formatAccountCurrency(ad.spend, accountCurrency)}
                                           </span>
                                           <span className="text-emerald-600 dark:text-emerald-400">
                                             💬 {ad.messagingCount} mess
                                           </span>
                                           {ad.costPerMessage > 0 && (
                                             <span className="text-purple-600 dark:text-purple-400">
-                                              🎯 {formatVnd(ad.costPerMessage)}/m
+                                              🎯 {formatAccountCurrency(ad.costPerMessage, accountCurrency)}/m
                                             </span>
                                           )}
                                         </div>
@@ -923,7 +946,7 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
                   className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-bold text-slate-900 dark:text-white"
                   placeholder="Ví dụ: 100000"
                 />
-                <p className="text-[10px] text-slate-400 mt-0.5">Nếu chiến dịch đã tiêu vượt mức này mà chưa ra tin nhắn nào $\rightarrow$ Cảnh báo ngay.</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Nếu chiến dịch đã tiêu vượt mức này mà chưa ra tin nhắn nào → cảnh báo ngay.</p>
               </div>
 
               {/* Threshold 2: Max Cost Per Message */}
@@ -939,34 +962,14 @@ export default function AdsStudio({ fbToken, onOpenTokenModal }) {
                   className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-bold text-slate-900 dark:text-white"
                   placeholder="Ví dụ: 45000"
                 />
-                <p className="text-[10px] text-slate-400 mt-0.5">Nếu giá / tin nhắn vượt mức này (sau khi đã tiêu &gt; 50k) $\rightarrow$ Cảnh báo ngay.</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Nếu giá / tin nhắn vượt mức này (sau khi đã tiêu &gt; 50k) → cảnh báo ngay.</p>
               </div>
 
-              {/* Action Mode: Flag vs Auto-Pause */}
+              {/* Safe action mode */}
               <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 space-y-2">
                 <span className="font-bold text-rose-900 dark:text-rose-300 block">Hành động khi vi phạm:</span>
-                <div className="space-y-1.5">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="autoPause"
-                      checked={!ruleConfig.autoPause}
-                      onChange={() => setRuleConfig({ ...ruleConfig, autoPause: false })}
-                      className="accent-rose-500"
-                    />
-                    <span className="font-bold text-slate-800 dark:text-slate-200">Gắn cờ Đỏ cảnh báo 🚨 (Để người dùng tự quyết định)</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="autoPause"
-                      checked={ruleConfig.autoPause}
-                      onChange={() => setRuleConfig({ ...ruleConfig, autoPause: true })}
-                      className="accent-rose-500"
-                    />
-                    <span className="font-bold text-rose-700 dark:text-rose-300">Tự động TẠM DỪNG (Auto-Pause) chiến dịch ngay lập tức 🛑</span>
-                  </label>
-                </div>
+                <p className="font-bold text-slate-800 dark:text-slate-200">Chỉ gắn cờ cảnh báo. Ứng dụng không tự dừng chiến dịch khi bạn mở hoặc làm mới dashboard.</p>
+                <p className="text-[10px] text-rose-700 dark:text-rose-300">Muốn dừng/bật hoặc đổi ngân sách, bạn luôn phải bấm xác nhận trước khi dữ liệu được gửi lên Meta.</p>
               </div>
             </div>
 

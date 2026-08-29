@@ -36,7 +36,6 @@ export default function PageManagerModal({
       return;
     }
     onSaveVisiblePages(selectedIds);
-    localStorage.setItem('metapost_visible_page_ids', JSON.stringify(selectedIds));
     onClose();
   };
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { getChatImageSize } from '../../utils/chatImageSize';
 import {
   Send,
   Image,
@@ -27,6 +28,7 @@ import {
   FileText
 } from 'lucide-react';
 import {
+  compressImage,
   formatDateTime,
   sendMessengerMessage,
   sendCommentReply,
@@ -34,6 +36,11 @@ import {
   isSticker,
   DEFAULT_QUICK_REPLIES
 } from '../../services/facebookApi';
+import {
+  canStartMobileSwipeBack,
+  getMobileSwipeBackOffset,
+  shouldCompleteMobileSwipeBack
+} from '../../utils/swipeBack';
 import CustomerAvatar from '../common/CustomerAvatar';
 
 function formatMessageTime(dateStr) {
@@ -67,10 +74,11 @@ export default function ChatThread({
   conversation,
   messages,
   isLoadingMessages,
+  messageLoadError = '',
+  onRetryMessages,
   onSendMessage,
   onUpdateStatus,
   onToggleStar,
-  onToggleUnread,
   onOpenMediaModal,
   onBackToList,
   onToggleProfilePanel,
@@ -87,12 +95,54 @@ export default function ChatThread({
   const [attachedFilePreview, setAttachedFilePreview] = useState(null);
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState('');
+  const [actionNotice, setActionNotice] = useState(null);
+  const [isSyncingMetaAction, setIsSyncingMetaAction] = useState(false);
+  const [swipeBackOffset, setSwipeBackOffset] = useState(0);
   const [shortcutQuery, setShortcutQuery] = useState(null);
-  const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const prevScrollHeightRef = useRef(0);
   const prevLengthRef = useRef(messages.length);
+  const swipeBackStartRef = useRef(null);
+
+  useEffect(() => {
+    setActionNotice(null);
+    setSendError('');
+    setSwipeBackOffset(0);
+    swipeBackStartRef.current = null;
+  }, [conversation?.fb_conversation_id]);
+
+  const handleSwipeBackStart = (event) => {
+    const touch = event.touches?.[0];
+    if (!touch || !canStartMobileSwipeBack({
+      startX: touch.clientX,
+      viewportWidth: window.innerWidth,
+      touchCount: event.touches.length
+    })) return;
+
+    swipeBackStartRef.current = { x: touch.clientX, y: touch.clientY };
+    setSwipeBackOffset(0);
+  };
+
+  const handleSwipeBackMove = (event) => {
+    const startPoint = swipeBackStartRef.current;
+    const touch = event.touches?.[0];
+    if (!startPoint || !touch) return;
+    setSwipeBackOffset(getMobileSwipeBackOffset(startPoint, { x: touch.clientX, y: touch.clientY }));
+  };
+
+  const finishSwipeBack = (event) => {
+    const startPoint = swipeBackStartRef.current;
+    const touch = event.changedTouches?.[0];
+    swipeBackStartRef.current = null;
+    setSwipeBackOffset(0);
+    if (startPoint && touch && shouldCompleteMobileSwipeBack(
+      startPoint,
+      { x: touch.clientX, y: touch.clientY }
+    )) {
+      onBackToList?.();
+    }
+  };
 
   useEffect(() => {
     // Maintain scroll position when older messages are prepended to top
@@ -108,7 +158,8 @@ export default function ChatThread({
 
     // Only auto-scroll to bottom on first load or when sending/receiving new message at bottom
     if (messages.length > prevLengthRef.current && !isLoadingOlderMessages) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      const container = scrollContainerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
     }
     prevLengthRef.current = messages.length;
   }, [messages, isLoadingOlderMessages]);
@@ -121,20 +172,47 @@ export default function ChatThread({
     }
   };
 
-  const handleFileChange = (e) => {
+  const handleFileChange = async (e) => {
     const file = e.target.files[0];
-    if (file) {
-      setAttachedFile(file);
-      if (file.type.startsWith('image/')) {
-        const url = URL.createObjectURL(file);
-        setAttachedFilePreview(url);
-      } else {
-        setAttachedFilePreview(null);
-      }
+    if (file) await prepareAttachedFile(file);
+    e.target.value = '';
+  };
+
+  const prepareAttachedFile = async (file) => {
+    if (!file) return false;
+    if (file.size > 25 * 1024 * 1024) {
+      setSendError('Ảnh/tệp vượt quá 25 MB nên Meta không thể nhận.');
+      return false;
     }
+    setSendError('');
+    setReplyMode('messenger');
+    const preparedFile = file.type.startsWith('image/')
+      ? await compressImage(file, 2048, 0.88)
+      : file;
+    setAttachedFile(preparedFile);
+    setAttachedFilePreview(previousPreview => {
+      if (previousPreview) URL.revokeObjectURL(previousPreview);
+      return preparedFile.type.startsWith('image/') ? URL.createObjectURL(preparedFile) : null;
+    });
+    return true;
+  };
+
+  const handlePaste = async (event) => {
+    const imageItem = [...(event.clipboardData?.items || [])].find(item => item.type?.startsWith('image/'));
+    if (!imageItem) return;
+    const pastedBlob = imageItem.getAsFile();
+    if (!pastedBlob) return;
+    event.preventDefault();
+    const extension = pastedBlob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+    const pastedFile = new File([pastedBlob], `anh-dan-${Date.now()}.${extension}`, {
+      type: pastedBlob.type || 'image/png',
+      lastModified: Date.now()
+    });
+    await prepareAttachedFile(pastedFile);
   };
 
   const handleRemoveFile = () => {
+    if (attachedFilePreview) URL.revokeObjectURL(attachedFilePreview);
     setAttachedFile(null);
     setAttachedFilePreview(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -143,6 +221,11 @@ export default function ChatThread({
   const handleSend = async (textToSend = null) => {
     const finalContent = textToSend !== null ? textToSend : replyText.trim();
     if (!finalContent && !attachedFile) return;
+    if (attachedFile && replyMode !== 'messenger') {
+      setReplyMode('messenger');
+      setSendError('Ảnh/tệp chỉ gửi trực tiếp qua Messenger. Mình đã chuyển về chế độ Messenger, bạn bấm gửi lại nhé.');
+      return;
+    }
 
     setIsSending(true);
     setSendError('');
@@ -157,6 +240,7 @@ export default function ChatThread({
       setReplyText('');
       handleRemoveFile();
     } catch (err) {
+      if (err.textSent) setReplyText('');
       setSendError(err.message || 'Không thể gửi tin nhắn qua Meta.');
     } finally {
       setIsSending(false);
@@ -165,6 +249,25 @@ export default function ChatThread({
 
   const handleSendLike = () => {
     handleSend('👍');
+  };
+
+  const handleMetaAction = async (action, messages = {}) => {
+    if (isSyncingMetaAction) return;
+    setIsSyncingMetaAction(true);
+    setSendError('');
+    setActionNotice(null);
+    try {
+      const result = await action();
+      if (result?.metaSynced === true) {
+        setActionNotice({ tone: 'success', text: messages.synced });
+      } else if (result?.localSaved) {
+        setActionNotice({ tone: 'warning', text: messages.localOnly });
+      }
+    } catch (error) {
+      setSendError(error.message || 'Meta chưa xác nhận thay đổi.');
+    } finally {
+      setIsSyncingMetaAction(false);
+    }
   };
 
   if (!conversation) {
@@ -219,7 +322,25 @@ export default function ChatThread({
     : [];
 
   return (
-    <main className="flex-1 flex flex-col min-w-0 bg-slate-50/50 dark:bg-slate-950/40 relative overflow-hidden h-full">
+    <main
+      className="flex-1 min-h-0 flex flex-col min-w-0 bg-slate-50/50 dark:bg-slate-950/40 relative overflow-hidden"
+      onTouchStart={handleSwipeBackStart}
+      onTouchMove={handleSwipeBackMove}
+      onTouchEnd={finishSwipeBack}
+      onTouchCancel={() => {
+        swipeBackStartRef.current = null;
+        setSwipeBackOffset(0);
+      }}
+      style={{ transform: swipeBackOffset > 0 ? `translateX(${swipeBackOffset}px)` : undefined }}
+    >
+      {swipeBackOffset > 0 && (
+        <div
+          className="pointer-events-none fixed left-3 top-1/2 z-50 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-brand-600 text-white shadow-xl md:hidden"
+          style={{ opacity: Math.min(1, 0.35 + swipeBackOffset / 100) }}
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </div>
+      )}
       {/* Header (Solid background & touch-friendly with iPhone Notch safe area) */}
       <div className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 z-10 flex-shrink-0 pt-[env(safe-area-inset-top,0px)] md:pt-0">
         <div className="h-14 sm:h-16 px-3 sm:px-4 lg:px-6 flex items-center justify-between">
@@ -266,6 +387,8 @@ export default function ChatThread({
             </div>
             <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate mt-0.2">
               {conversation.page_name} • {conversation.conversation_type === 'messenger' ? 'Messenger' : 'Bình luận'}
+              {conversation.read_sync_state === 'pending' && ' • Đang đối chiếu đã đọc…'}
+              {(conversation.read_sync_state === 'failed' || conversation.read_sync_state === 'unconfirmed') && ' • Meta chưa xác nhận đã đọc'}
             </p>
           </div>
         </div>
@@ -273,28 +396,52 @@ export default function ChatThread({
         {/* Right Action Buttons */}
         <div className="flex items-center gap-1 sm:gap-2">
           <button
-            onClick={() => onToggleStar(conversation.fb_conversation_id)}
+            onClick={() => handleMetaAction(
+              () => onToggleStar(conversation.fb_conversation_id),
+              conversation.is_starred
+                ? {
+                    synced: 'Đã gỡ nhãn Cần theo dõi trong app và trên Meta.',
+                    localOnly: 'Đã gỡ Theo dõi trong app.'
+                  }
+                : {
+                    synced: 'Đã bật Theo dõi trong app và gắn nhãn tùy chỉnh trên Meta.',
+                    localOnly: 'Đã bật Theo dõi trong app; Meta chưa nhận nhãn tùy chỉnh.'
+                  }
+            )}
+            disabled={isSyncingMetaAction}
             className={`p-2 rounded-xl border transition-smooth ${
               conversation.is_starred
                 ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-500 border-amber-200 dark:border-amber-800'
                 : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 border-transparent'
             }`}
-            title={conversation.is_starred ? 'Bỏ gắn sao' : 'Gắn sao theo dõi'}
+            title={conversation.is_starred ? 'Gỡ Theo dõi trong app' : 'Theo dõi trong app và thử gắn nhãn Meta'}
           >
             <Star className="w-4 h-4 fill-current" />
           </button>
 
           <button
-            onClick={() => onUpdateStatus(conversation.fb_conversation_id, conversation.status === 'done' ? 'active' : 'done')}
+            onClick={() => handleMetaAction(
+              () => onUpdateStatus(conversation.fb_conversation_id, conversation.status === 'done' ? 'active' : 'done'),
+              conversation.status === 'done'
+                ? {
+                    synced: 'Đã mở lại trong app và gỡ nhãn tùy chỉnh trên Meta.',
+                    localOnly: 'Đã mở lại cuộc trò chuyện trong app.'
+                  }
+                : {
+                    synced: 'Đã xử lý trong app và gắn nhãn tùy chỉnh trên Meta.',
+                    localOnly: 'Đã xử lý trong app; Meta chưa nhận nhãn tùy chỉnh.'
+                  }
+            )}
+            disabled={isSyncingMetaAction}
             className={`px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl text-xs font-bold flex items-center gap-1 sm:gap-1.5 border transition-smooth ${
               conversation.status === 'done'
                 ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800'
                 : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-200'
             }`}
-            title="Đánh dấu đã hoàn thành xử lý"
+            title="Đánh dấu trong app và thử đồng bộ nhãn tùy chỉnh Meta"
           >
             <CheckCircle2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            <span>{conversation.status === 'done' ? 'Đã Xong' : 'Xong'}</span>
+            <span>{conversation.status === 'done' ? 'Đã xử lý trong app' : 'Xử lý trong app'}</span>
           </button>
 
           <button
@@ -308,11 +455,27 @@ export default function ChatThread({
         </div>
       </div>
 
+      {messageLoadError && (
+        <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+          <span className="min-w-0 flex-1 truncate">{messageLoadError}</span>
+          {onRetryMessages && (
+            <button
+              type="button"
+              onClick={onRetryMessages}
+              className="rounded-lg border border-amber-300 bg-white px-2 py-1 font-bold dark:border-amber-700 dark:bg-slate-900"
+            >
+              Thử lại
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Messages Scroll Area (With Messenger-style Consecutive Grouping & Infinite Scroll) */}
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-3 sm:p-4 lg:p-6 space-y-1 touch-scroll-y overscroll-contain"
+        className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 lg:p-6 space-y-1 touch-scroll-y overscroll-contain"
       >
         {isLoadingMessages ? (
           <div className="h-full flex flex-col items-center justify-center text-slate-400">
@@ -450,6 +613,8 @@ export default function ChatThread({
                         <img
                           src={msg.sticker}
                           alt="Sticker"
+                          loading="lazy"
+                          decoding="async"
                           className="w-20 h-20 sm:w-24 sm:h-24 object-contain select-none"
                         />
                       </div>
@@ -469,6 +634,8 @@ export default function ChatThread({
                             <img
                               src={imgSource}
                               alt="Sticker"
+                              loading="lazy"
+                              decoding="async"
                               className="w-20 h-20 sm:w-24 sm:h-24 object-contain select-none"
                             />
                           </div>
@@ -477,13 +644,18 @@ export default function ChatThread({
 
                       if (isImg) {
                         const imgSource = att.image_data?.url || att.file_url;
+                        const imageSize = getChatImageSize(att.image_data);
                         return (
                           <div
                             key={aIdx}
                             onClick={() => onOpenMediaModal && onOpenMediaModal(imgSource)}
+                            style={{ width: imageSize.width, maxWidth: '100%' }}
                             className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 max-w-[280px] cursor-pointer hover:opacity-90 transition-opacity relative group shadow-xs"
                           >
-                            <img src={imgSource} alt="Attached image" className="w-full h-auto object-cover max-h-72" />
+                            <img src={imgSource} alt="Ảnh trong cuộc trò chuyện" width={imageSize.width} height={imageSize.height}
+                              loading="lazy" fetchPriority="low"
+                              style={{ aspectRatio: `${imageSize.width} / ${imageSize.height}` }}
+                              decoding="async" className="w-full h-auto object-contain bg-slate-50 dark:bg-slate-800" />
                             <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white text-xs font-bold transition-opacity">
                               🔍 Xem ảnh
                             </div>
@@ -494,7 +666,7 @@ export default function ChatThread({
                       if (isAudio) {
                         return (
                           <div key={aIdx} className="p-2 rounded-2xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center gap-2">
-                            <audio controls src={att.file_url} className="h-8 max-w-[240px]" />
+                            <audio controls preload="metadata" src={att.file_url} className="h-8 max-w-[240px]" />
                           </div>
                         );
                       }
@@ -502,7 +674,7 @@ export default function ChatThread({
                       if (isVideo) {
                         return (
                           <div key={aIdx} className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 max-w-[280px]">
-                            <video controls src={att.file_url || att.video_data?.url} className="w-full h-auto max-h-72" />
+                            <video controls preload="metadata" src={att.file_url || att.video_data?.url} className="w-full h-auto max-h-72" />
                           </div>
                         );
                       }
@@ -534,7 +706,6 @@ export default function ChatThread({
           })}
         </>
       )}
-      <div ref={messagesEndRef} />
       </div>
 
       {/* Bottom Reply Area (Sleek Compact iOS-style) */}
@@ -560,9 +731,6 @@ export default function ChatThread({
                   <p className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-brand-600 truncate">
                     {reply.title}
                   </p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                    {reply.text}
-                  </p>
                 </div>
               </button>
             ))}
@@ -570,13 +738,14 @@ export default function ChatThread({
         )}
 
         {/* Compact Tool Strip & Quick Replies (Combined in 1 sleek line) */}
-        <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 touch-scroll-x overscroll-x-contain">
+        <div className="relative min-w-0">
+        <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5 pr-7 sm:pr-0 touch-scroll-x overscroll-x-contain">
           {/* Quick mode & tools */}
           <div className="flex items-center gap-1 flex-shrink-0">
             <button
               type="button"
               onClick={() => setReplyMode(prev => prev === 'messenger' ? 'public_comment' : (prev === 'public_comment' ? 'private_reply' : 'messenger'))}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 border transition-smooth ${
+              className={`min-h-9 px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 border transition-smooth ${
                 replyMode === 'messenger'
                   ? 'bg-blue-50 dark:bg-blue-950/50 text-blue-600 border-blue-200/60'
                   : (replyMode === 'public_comment'
@@ -594,7 +763,7 @@ export default function ChatThread({
               <button
                 type="button"
                 onClick={onOpenVietQRModal}
-                className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center gap-1 border border-emerald-500/20 hover:bg-emerald-500/20 transition-smooth"
+                className="min-h-9 px-2.5 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center gap-1 border border-emerald-500/20 hover:bg-emerald-500/20 transition-smooth"
                 title="Tạo mã VietQR chuyển khoản nhanh"
               >
                 <QrCode className="w-3 h-3" />
@@ -606,7 +775,7 @@ export default function ChatThread({
               <button
                 type="button"
                 onClick={onOpenQuickRepliesModal}
-                className="p-1 rounded-lg text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/40 border border-amber-200/40 transition-smooth"
+                className="w-9 h-9 rounded-lg text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/40 border border-amber-200/40 transition-smooth flex items-center justify-center"
                 title="Quản lý mẫu câu"
               >
                 <Zap className="w-3.5 h-3.5" />
@@ -621,12 +790,14 @@ export default function ChatThread({
                 key={qr.id}
                 type="button"
                 onClick={() => handleSelectShortcut(qr)}
-                className="px-2.5 py-1.5 min-h-8 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium whitespace-nowrap transition-smooth border border-slate-200/60 dark:border-slate-700/60 flex items-center gap-1 flex-shrink-0"
+                className="px-2.5 py-1.5 min-h-9 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium whitespace-nowrap transition-smooth border border-slate-200/60 dark:border-slate-700/60 flex items-center gap-1 flex-shrink-0"
               >
                 <span className="font-mono font-bold text-amber-600 dark:text-amber-400 text-[11px]">{qr.shortcut}</span>
               </button>
             ))}
           </div>
+        </div>
+        <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-white dark:from-slate-900 to-transparent sm:hidden" aria-hidden="true" />
         </div>
 
         {/* File attachment preview */}
@@ -639,7 +810,7 @@ export default function ChatThread({
             )}
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">{attachedFile.name}</p>
-              <p className="text-[10px] text-slate-400">{(attachedFile.size / 1024).toFixed(1)} KB</p>
+              <p className="text-[10px] text-slate-400">☁ Meta • {(attachedFile.size / 1024).toFixed(1)} KB</p>
             </div>
             <button onClick={handleRemoveFile} className="p-1 text-slate-400 hover:text-red-500">
               <X className="w-4 h-4" />
@@ -656,6 +827,27 @@ export default function ChatThread({
               onClick={() => setSendError('')}
               className="rounded p-0.5 text-red-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/50"
               aria-label="Đóng thông báo lỗi"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
+        {actionNotice?.text && (
+          <div className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
+            actionNotice.tone === 'success'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/40 dark:text-emerald-300'
+              : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-300'
+          }`}>
+            {actionNotice.tone === 'success'
+              ? <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              : <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />}
+            <p className="flex-1 leading-relaxed">{actionNotice.text}</p>
+            <button
+              type="button"
+              onClick={() => setActionNotice(null)}
+              className="rounded p-0.5 opacity-70 hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10"
+              aria-label="Đóng thông báo trạng thái"
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -682,10 +874,13 @@ export default function ChatThread({
           </button>
 
           <textarea
+            id="metapost-message-input"
+            name="message"
             rows="1"
             placeholder="Nhập tin nhắn... (gõ '/' chọn mẫu câu)"
             value={replyText}
             onChange={handleTextChange}
+            onPaste={handlePaste}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();

@@ -1,0 +1,6 @@
+# TAStore68 Pro
+
+Ứng dụng nội bộ để quản lý Messenger, đăng bài Fanpage và báo cáo quảng cáo.
+Không thu thập Token Facebook vào nội dung công khai.
+
+- [Mở ứng dụng TAStore68 Pro](https://metapost-studio.vercel.app/)

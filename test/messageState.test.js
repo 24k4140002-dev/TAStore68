@@ -4,8 +4,25 @@ import assert from 'node:assert/strict';
 import {
   confirmOptimisticMessage,
   createOptimisticMessage,
+  isConversationRequestCurrent,
+  mergeMessageWindow,
   removeOptimisticMessage
 } from '../src/services/messageState.js';
+
+test('an older history response cannot update a newly selected conversation', () => {
+  assert.equal(isConversationRequestCurrent({
+    activeConversationId: 'conv_B',
+    conversationId: 'conv_A',
+    currentRequestId: 8,
+    requestId: 7
+  }), false);
+  assert.equal(isConversationRequestCurrent({
+    activeConversationId: 'conv_A',
+    conversationId: 'conv_A',
+    currentRequestId: 7,
+    requestId: 7
+  }), true);
+});
 
 test('confirms only the matching optimistic Messenger message', () => {
   const optimistic = createOptimisticMessage({
@@ -41,5 +58,22 @@ test('removes only the failed optimistic message', () => {
   assert.deepEqual(removeOptimisticMessage(messages, 'temp_failed'), [
     { id: 'existing' },
     { id: 'temp_other', sending: true }
+  ]);
+});
+
+test('merges a small latest-message window without dropping older history', () => {
+  const existing = [
+    { id: 'old_1', created_time: '2026-08-23T23:00:00.000Z' },
+    { id: 'shared', message: 'stale', created_time: '2026-08-24T00:00:00.000Z' }
+  ];
+  const latest = [
+    { id: 'shared', message: 'fresh', created_time: '2026-08-24T00:00:00.000Z' },
+    { id: 'new_1', created_time: '2026-08-24T01:00:00.000Z' }
+  ];
+
+  assert.deepEqual(mergeMessageWindow(existing, latest), [
+    existing[0],
+    latest[0],
+    latest[1]
   ]);
 });

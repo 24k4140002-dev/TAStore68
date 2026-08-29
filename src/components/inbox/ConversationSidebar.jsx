@@ -1,21 +1,28 @@
-import React, { useState, useMemo, memo } from 'react';
+import React, { useState, useMemo, useEffect, useRef, memo } from 'react';
 import {
   Search,
   MessageSquare,
   MessagesSquare,
   CheckCircle2,
   Star,
-  Archive,
-  AlertTriangle,
-  Tag,
   RefreshCw,
   SlidersHorizontal,
   ChevronDown,
   Key,
-  Edit3
+  Edit3,
+  Check
 } from 'lucide-react';
 import { getInitials, getAvatarColor, formatTimeAgo, getPageDisplayName } from '../../services/facebookApi';
 import CustomerAvatar from '../common/CustomerAvatar';
+
+const MOBILE_CONVERSATION_BATCH_SIZE = 30;
+const DESKTOP_CONVERSATION_BATCH_SIZE = 50;
+
+function getConversationBatchSize() {
+  return typeof window !== 'undefined' && window.innerWidth < 768
+    ? MOBILE_CONVERSATION_BATCH_SIZE
+    : DESKTOP_CONVERSATION_BATCH_SIZE;
+}
 
 // ⚡ Memoized Conversation Card for 60/120fps smooth scrolling
 const ConversationCard = memo(function ConversationCard({
@@ -29,9 +36,10 @@ const ConversationCard = memo(function ConversationCard({
   const isStarred = conv.is_starred || conv.status === 'starred';
 
   return (
-    <div
+    <button
+      type="button"
       onClick={onSelect}
-      className={`group flex items-start gap-3.5 p-3.5 cursor-pointer transition-smooth relative gpu-layer conversation-card-layer ${
+      className={`group flex w-full items-start gap-3.5 p-3.5 text-left cursor-pointer transition-smooth relative conversation-card-layer [content-visibility:auto] [contain-intrinsic-size:80px] ${
         isActive
           ? 'bg-blue-50/90 dark:bg-blue-950/50 border-l-4 border-l-brand-500'
           : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
@@ -58,7 +66,7 @@ const ConversationCard = memo(function ConversationCard({
       {/* Body info (Clear 15px font) */}
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline justify-between gap-1 mb-1">
-          <h4 className={`text-[15px] truncate flex items-center gap-1.5 ${isUnread ? 'font-bold text-slate-900 dark:text-white' : 'font-semibold text-slate-700 dark:text-slate-200'}`}>
+          <h4 className={`text-[15px] truncate flex items-center gap-1.5 ${isActive || isUnread ? 'font-extrabold text-slate-900 dark:text-white' : 'font-semibold text-slate-700 dark:text-slate-200'}`}>
             {conv.customer_name}
             {isStarred && <Star className="w-4 h-4 fill-amber-400 text-amber-400 flex-shrink-0" />}
           </h4>
@@ -88,7 +96,7 @@ const ConversationCard = memo(function ConversationCard({
           ))}
         </div>
       </div>
-    </div>
+    </button>
   );
 });
 
@@ -115,12 +123,18 @@ export default function ConversationSidebar({
   onRefresh,
   isLoading,
   onMarkAllAsRead,
+  isMarkingRead = false,
+  readActionNotice = null,
   onOpenTokenModal,
   onLoadMore,
   isLoadingMore,
-  hasMore = true
+  hasMore = true,
+  loadError = null
 }) {
   const [showFilters, setShowFilters] = useState(false);
+  const [isPageMenuOpen, setIsPageMenuOpen] = useState(false);
+  const [visibleConversationLimit, setVisibleConversationLimit] = useState(getConversationBatchSize);
+  const pageMenuRef = useRef(null);
   const [pageNicknames, setPageNicknames] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('metapost_page_nicknames') || '{}');
@@ -184,36 +198,104 @@ export default function ConversationSidebar({
       return true;
     });
   }, [conversations, selectedPageId, channelFilter, statusFilter, selectedLabelId, searchQuery]);
+  const renderedConversations = filteredConversations.slice(0, visibleConversationLimit);
 
-  const unreadTotal = conversations.filter(c => c.unread_count > 0).length;
+  useEffect(() => {
+    setVisibleConversationLimit(getConversationBatchSize());
+  }, [selectedPageId, channelFilter, statusFilter, selectedLabelId, searchQuery]);
+
+  const unreadTotal = conversations.filter(c => (
+    c.unread_count > 0
+    && (selectedPageId === 'all' || c.page_id === selectedPageId)
+  )).length;
+  const selectedPageConversationCount = conversations.filter(
+    conv => selectedPageId === 'all' || conv.page_id === selectedPageId
+  ).length;
+  const selectedPage = selectedPageId === 'all' ? null : pages.find(page => page.id === selectedPageId);
+  const selectedPageLabel = selectedPage
+    ? `🚩 ${getPageDisplayName(selectedPage, pages, pageNicknames)}`
+    : `📂 Tất cả Fanpage (${pages.length})`;
+
+  useEffect(() => {
+    if (!isPageMenuOpen) return undefined;
+    const handlePointerDown = event => {
+      if (!pageMenuRef.current?.contains(event.target)) setIsPageMenuOpen(false);
+    };
+    const handleKeyDown = event => {
+      if (event.key === 'Escape') setIsPageMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isPageMenuOpen]);
+
+  const handleSelectPage = pageId => {
+    onSelectPage(pageId);
+    setIsPageMenuOpen(false);
+  };
 
   return (
-    <aside className="w-full h-full flex flex-col border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+    <aside className="w-full h-full min-h-0 flex flex-col border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
       {/* Compact Header — Only Page Selector & Action Icons */}
       <div className="p-2 sm:p-2.5 border-b border-slate-100 dark:border-slate-800 flex-shrink-0 bg-white dark:bg-slate-900 z-10 space-y-1.5">
         <div className="flex items-center justify-between gap-1.5">
           {/* Page Dropdown */}
-          <div className="relative flex-1 min-w-0">
-            <select
-              value={selectedPageId}
-              onChange={(e) => onSelectPage(e.target.value)}
-              className="w-full pl-3 pr-7 py-2 text-xs font-bold rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-700/80 focus:outline-none focus:ring-2 focus:ring-brand-500 appearance-none transition-smooth truncate cursor-pointer"
+          <div ref={pageMenuRef} className="relative flex-1 min-w-0">
+            <button
+              type="button"
+              onClick={() => setIsPageMenuOpen(open => !open)}
+              aria-haspopup="listbox"
+              aria-expanded={isPageMenuOpen}
+              className={`flex w-full min-h-10 items-center rounded-xl border bg-slate-100 py-2 pl-3 pr-8 text-left text-xs font-extrabold text-slate-900 transition-smooth dark:bg-slate-800 dark:text-white ${isPageMenuOpen ? 'border-brand-500 ring-2 ring-brand-500/20' : 'border-slate-200/80 dark:border-slate-700/80'}`}
             >
-              <option value="all">📂 Tất cả Fanpage ({pages.length})</option>
-              {pages.map(p => (
-                <option key={p.id} value={p.id}>
-                  🚩 {getPageDisplayName(p, pages, pageNicknames)}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400" />
+              <span className="truncate">{selectedPageLabel}</span>
+            </button>
+            <ChevronDown className={`pointer-events-none absolute right-2.5 top-5 h-3.5 w-3.5 -translate-y-1/2 text-slate-400 transition-transform ${isPageMenuOpen ? 'rotate-180' : ''}`} />
+
+            {isPageMenuOpen && (
+              <div
+                role="listbox"
+                aria-label="Chọn Fanpage"
+                className="absolute left-0 top-full z-50 mt-1.5 max-h-[min(56vh,420px)] w-[min(82vw,320px)] overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-1.5 shadow-2xl dark:border-slate-700 dark:bg-slate-900 sm:w-[320px]"
+              >
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={selectedPageId === 'all'}
+                  onClick={() => handleSelectPage('all')}
+                  className={`flex w-full items-start gap-2 rounded-xl px-3 py-2.5 text-left text-xs leading-relaxed transition-colors ${selectedPageId === 'all' ? 'bg-blue-50 font-extrabold text-brand-700 ring-1 ring-brand-200 dark:bg-blue-950/50 dark:text-blue-300 dark:ring-blue-800' : 'font-semibold text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'}`}
+                >
+                  <span className="min-w-0 flex-1">📂 Tất cả Fanpage ({pages.length})</span>
+                  {selectedPageId === 'all' && <Check className="mt-0.5 h-4 w-4 flex-shrink-0 stroke-[3]" />}
+                </button>
+                {pages.map(page => {
+                  const isSelected = page.id === selectedPageId;
+                  return (
+                    <button
+                      key={page.id}
+                      type="button"
+                      role="option"
+                      aria-selected={isSelected}
+                      onClick={() => handleSelectPage(page.id)}
+                      className={`flex w-full items-start gap-2 rounded-xl px-3 py-2.5 text-left text-xs leading-relaxed transition-colors ${isSelected ? 'bg-blue-50 font-extrabold text-brand-700 ring-1 ring-brand-200 dark:bg-blue-950/50 dark:text-blue-300 dark:ring-blue-800' : 'font-semibold text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800'}`}
+                    >
+                      <span className="min-w-0 flex-1">🚩 {getPageDisplayName(page, pages, pageNicknames)}</span>
+                      {isSelected && <Check className="mt-0.5 h-4 w-4 flex-shrink-0 stroke-[3]" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Quick Nickname Edit */}
           {selectedPageId !== 'all' && (
             <button
               onClick={handleEditNickname}
-              className="p-2 rounded-xl text-slate-500 hover:text-brand-500 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth flex-shrink-0"
+              className="w-10 h-10 rounded-xl text-slate-500 hover:text-brand-500 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth flex-shrink-0 flex items-center justify-center"
               title="Đặt biệt danh cho Page này"
             >
               <Edit3 className="w-4 h-4" />
@@ -223,7 +305,7 @@ export default function ConversationSidebar({
           {/* Page Visibility Manager Button (⚙️ Ẩn/Hiện Trang) */}
           <button
             onClick={onOpenPageManager}
-            className="p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:text-brand-500 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth flex-shrink-0"
+            className="w-10 h-10 rounded-xl text-slate-600 dark:text-slate-300 hover:text-brand-500 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth flex-shrink-0 flex items-center justify-center"
             title="Quản lý Ẩn/Hiện các Fanpage hoạt động"
           >
             <SlidersHorizontal className="w-4 h-4" />
@@ -232,9 +314,9 @@ export default function ConversationSidebar({
           {/* Toggle Search & Filters Button */}
           <button
             onClick={() => setShowFilters(!showFilters)}
-            className={`p-2 rounded-xl border transition-smooth relative flex-shrink-0 ${
+            className={`w-10 h-10 rounded-xl border transition-smooth relative flex-shrink-0 flex items-center justify-center ${
               showFilters || hasActiveFilter
-                ? 'bg-brand-500 text-white border-brand-600 shadow-sm'
+                ? 'bg-brand-600 text-white border-brand-700 shadow-sm'
                 : 'text-slate-600 dark:text-slate-300 hover:text-brand-500 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700'
             }`}
             title={showFilters ? 'Ẩn bộ lọc' : 'Mở tìm kiếm & lọc tin nhắn'}
@@ -249,7 +331,7 @@ export default function ConversationSidebar({
           <button
             onClick={onRefresh}
             disabled={isLoading}
-            className={`p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:text-brand-500 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth flex-shrink-0 ${isLoading ? 'animate-spin text-brand-500' : ''}`}
+            className={`w-10 h-10 rounded-xl text-slate-600 dark:text-slate-300 hover:text-brand-500 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 transition-smooth flex-shrink-0 flex items-center justify-center ${isLoading ? 'animate-spin text-brand-500' : ''}`}
             title="Làm mới tin nhắn"
           >
             <RefreshCw className="w-4 h-4" />
@@ -267,7 +349,7 @@ export default function ConversationSidebar({
                 placeholder="Tìm tên khách hàng, nội dung..."
                 value={searchQuery}
                 onChange={(e) => onSearchChange(e.target.value)}
-                className="w-full pl-9 pr-3.5 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-smooth"
+                className="w-full min-h-10 pl-9 pr-3.5 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-smooth"
               />
             </div>
 
@@ -275,19 +357,19 @@ export default function ConversationSidebar({
             <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400">
               <button
                 onClick={() => onChannelFilterChange('all')}
-                className={`py-1.5 rounded-lg text-center transition-smooth ${channelFilter === 'all' ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-sm font-bold' : 'hover:text-slate-900 dark:hover:text-white'}`}
+                className={`min-h-9 py-1.5 rounded-lg text-center transition-smooth ${channelFilter === 'all' ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-sm font-bold' : 'hover:text-slate-900 dark:hover:text-white'}`}
               >
                 Tất cả
               </button>
               <button
                 onClick={() => onChannelFilterChange('messenger')}
-                className={`py-1.5 rounded-lg text-center flex items-center justify-center gap-1 transition-smooth ${channelFilter === 'messenger' ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-sm font-bold' : 'hover:text-slate-900 dark:hover:text-white'}`}
+                className={`min-h-9 py-1.5 rounded-lg text-center flex items-center justify-center gap-1 transition-smooth ${channelFilter === 'messenger' ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-sm font-bold' : 'hover:text-slate-900 dark:hover:text-white'}`}
               >
                 <MessageSquare className="w-3.5 h-3.5 text-blue-500" /> Inbox
               </button>
               <button
                 onClick={() => onChannelFilterChange('comment')}
-                className={`py-1.5 rounded-lg text-center flex items-center justify-center gap-1 transition-smooth ${channelFilter === 'comment' ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-sm font-bold' : 'hover:text-slate-900 dark:hover:text-white'}`}
+                className={`min-h-9 py-1.5 rounded-lg text-center flex items-center justify-center gap-1 transition-smooth ${channelFilter === 'comment' ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-sm font-bold' : 'hover:text-slate-900 dark:hover:text-white'}`}
               >
                 <MessagesSquare className="w-3.5 h-3.5 text-emerald-500" /> Comment
               </button>
@@ -303,7 +385,7 @@ export default function ConversationSidebar({
               </button>
               <button
                 onClick={() => onStatusFilterChange('unread')}
-                className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1.5 transition-smooth flex-shrink-0 ${statusFilter === 'unread' ? 'bg-brand-500 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
+                className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1.5 transition-smooth flex-shrink-0 ${statusFilter === 'unread' ? 'bg-brand-600 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
               >
                 <span className="w-2 h-2 rounded-full bg-brand-500 flex-shrink-0 animate-pulse"></span>
                 Chưa đọc
@@ -321,21 +403,15 @@ export default function ConversationSidebar({
               </button>
               <button
                 onClick={() => onStatusFilterChange('starred')}
-                className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1 transition-smooth flex-shrink-0 ${statusFilter === 'starred' ? 'bg-amber-500 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
+                className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1 transition-smooth flex-shrink-0 ${statusFilter === 'starred' ? 'bg-amber-700 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
               >
-                <Star className="w-3.5 h-3.5 fill-current" /> Gắn sao
+                <Star className="w-3.5 h-3.5 fill-current" /> Theo dõi
               </button>
               <button
                 onClick={() => onStatusFilterChange('done')}
                 className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1 transition-smooth flex-shrink-0 ${statusFilter === 'done' ? 'bg-emerald-600 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
               >
-                <CheckCircle2 className="w-3.5 h-3.5" /> Đã xong
-              </button>
-              <button
-                onClick={() => onStatusFilterChange('spam')}
-                className={`px-3 py-1.5 rounded-full whitespace-nowrap font-medium flex items-center gap-1 transition-smooth flex-shrink-0 ${statusFilter === 'spam' ? 'bg-red-600 text-white font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'}`}
-              >
-                <AlertTriangle className="w-3.5 h-3.5" /> Spam
+                <CheckCircle2 className="w-3.5 h-3.5" /> Đã xử lý
               </button>
             </div>
 
@@ -363,26 +439,63 @@ export default function ConversationSidebar({
               <Key className="w-6 h-6" />
             </div>
             <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Chưa tải được Fanpage</p>
-            <p className="text-xs text-slate-400 mt-1 max-w-[220px]">
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-[220px]">
               Hãy kiểm tra lại Facebook Token hoặc bấm nút bên dưới để dán lại Token.
             </p>
             {onOpenTokenModal && (
               <button
                 onClick={onOpenTokenModal}
-                className="mt-3 px-4 py-2 rounded-xl bg-brand-500 text-white text-xs font-bold shadow-md shadow-brand-500/20 hover:bg-brand-600 transition-smooth"
+                className="mt-3 px-4 py-2 rounded-xl bg-brand-600 text-white text-xs font-bold shadow-md shadow-brand-500/20 hover:bg-brand-700 transition-smooth"
               >
                 🔑 Cấu hình Token Facebook
               </button>
             )}
           </div>
+        ) : isLoading && selectedPageConversationCount === 0 ? (
+          <div className="h-64 flex flex-col items-center justify-center p-6 text-center text-slate-400">
+            <RefreshCw className="w-9 h-9 mb-3 animate-spin text-brand-500" />
+            <p className="text-sm font-bold text-slate-700 dark:text-slate-300">Đang tải hội thoại từ Meta...</p>
+          </div>
+        ) : loadError && loadError.pageId === selectedPageId && selectedPageConversationCount === 0 ? (
+          <div className="h-64 flex flex-col items-center justify-center p-6 text-center text-slate-400">
+            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-xl dark:bg-red-950/40">⚠️</div>
+            <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Meta chưa tải được hội thoại</p>
+            <p className="mt-1 max-w-[260px] text-xs text-slate-500 dark:text-slate-400">
+              {loadError.message}{loadError.code ? ` (Meta #${loadError.code})` : ''}
+            </p>
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="mt-3 rounded-xl bg-brand-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-brand-700"
+            >
+              Thử tải lại
+            </button>
+          </div>
         ) : filteredConversations.length === 0 ? (
           <div className="h-64 flex flex-col items-center justify-center p-6 text-center text-slate-400">
             <MessageSquare className="w-12 h-12 stroke-[1.5] mb-2.5 opacity-50" />
-            <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">Không có cuộc trò chuyện nào</p>
-            <p className="text-xs text-slate-400 mt-0.5">Thử chọn thư mục khác hoặc đổi từ khóa tìm kiếm</p>
+            <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+              {hasActiveFilter && selectedPageConversationCount > 0
+                ? `${selectedPageConversationCount} hội thoại đang bị bộ lọc ẩn`
+                : 'Page chưa có cuộc trò chuyện Messenger nào'}
+            </p>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {hasActiveFilter && selectedPageConversationCount > 0
+                ? 'Xóa bộ lọc để hiện lại toàn bộ tin nhắn của Page này.'
+                : 'Bấm làm mới để kiểm tra lại dữ liệu từ Meta.'}
+            </p>
+            {hasActiveFilter && selectedPageConversationCount > 0 && (
+              <button
+                type="button"
+                onClick={handleClearFilters}
+                className="mt-3 rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white dark:bg-slate-100 dark:text-slate-900"
+              >
+                Xóa bộ lọc
+              </button>
+            )}
           </div>
         ) : (
-          filteredConversations.map(conv => (
+          renderedConversations.map(conv => (
             <ConversationCard
               key={conv.fb_conversation_id}
               conv={conv}
@@ -392,6 +505,18 @@ export default function ConversationSidebar({
               onSelect={() => onSelectConversation(conv)}
             />
           ))
+        )}
+
+        {filteredConversations.length > renderedConversations.length && (
+          <div className="p-3 text-center">
+            <button
+              type="button"
+              onClick={() => setVisibleConversationLimit(limit => limit + getConversationBatchSize())}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              Hiện thêm {Math.min(getConversationBatchSize(), filteredConversations.length - renderedConversations.length)} hội thoại
+            </button>
+          </div>
         )}
 
         {/* Load More Button */}
@@ -418,18 +543,29 @@ export default function ConversationSidebar({
         )}
       </div>
 
+      {readActionNotice?.text && (
+        <div className={`mx-3 mb-2 rounded-lg border px-3 py-2 text-[11px] font-semibold ${
+          readActionNotice.tone === 'success'
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300'
+            : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300'
+        }`}>
+          {readActionNotice.text}
+        </div>
+      )}
+
       {/* Footer stats */}
       <div className="px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs sm:text-[13px] text-slate-500 font-semibold bg-slate-50/50 dark:bg-slate-800/30 gap-2">
         <span>Tổng: {conversations.length}</span>
         {unreadTotal > 0 ? (
           <button
             onClick={onMarkAllAsRead}
+            disabled={isMarkingRead}
             className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-brand-50 dark:bg-brand-950/30 text-brand-600 dark:text-brand-400 font-bold hover:bg-brand-100 dark:hover:bg-brand-900/40 transition-colors text-xs shadow-xs"
           >
-            ✓ Đã đọc tất cả ({unreadTotal})
+            {isMarkingRead ? 'Đang đối chiếu Meta…' : `✓ Đọc ${unreadTotal} tin đang tải`}
           </button>
         ) : (
-          <span className="text-emerald-500">✓ Đã đọc hết</span>
+          <span className="text-emerald-700 dark:text-emerald-400">✓ Đã đọc hết</span>
         )}
       </div>
     </aside>

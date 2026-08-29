@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { X, Key, ShieldCheck, Check, Sparkles, Zap, AlertCircle, CheckCircle2, QrCode, Smartphone, Copy } from 'lucide-react';
+import { X, Key, ShieldCheck, Check, Zap, AlertCircle, CheckCircle2, QrCode, Smartphone, Copy, Trash2 } from 'lucide-react';
 import { exchangePermanentToken, fetchPages, cleanFacebookToken } from '../../services/facebookApi';
 
-export default function TokenModal({ currentToken, onClose, onSave }) {
+export default function TokenModal({ currentToken, onClose, onSave, onClear }) {
   const [tab, setTab] = useState('direct'); // 'direct' | 'upgrade' | 'mobile_qr'
   const [tokenInput, setTokenInput] = useState(currentToken || '');
   const [shortToken, setShortToken] = useState('');
@@ -64,6 +64,12 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
     navigator.clipboard.writeText(mobileSyncUrl);
     setIsCopiedLink(true);
     setTimeout(() => setIsCopiedLink(false), 2000);
+  };
+
+  const handleClearToken = () => {
+    if (!window.confirm('Gỡ Facebook Token và cache hội thoại có chứa Page Token khỏi thiết bị này? Đơn hàng, ghi chú và mẫu trả lời vẫn được giữ lại.')) return;
+    onClear?.();
+    onClose();
   };
 
   const handleDirectSave = async (e) => {
@@ -146,7 +152,10 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
+            aria-label="Đóng cửa sổ cấu hình Facebook Token"
+            title="Đóng"
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-smooth"
           >
             <X className="w-5 h-5" />
@@ -233,6 +242,17 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
                 <span>Token chỉ được lưu trên trình duyệt này. Không dùng ứng dụng trên máy lạ hoặc máy dùng chung.</span>
               </div>
 
+              {currentToken && (
+                <button
+                  type="button"
+                  onClick={handleClearToken}
+                  className="w-full px-4 py-2.5 rounded-xl border border-rose-200 dark:border-rose-800 text-xs font-bold text-rose-600 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center justify-center gap-1.5"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Gỡ Token khỏi thiết bị này</span>
+                </button>
+              )}
+
               <div className="flex items-center justify-end gap-2.5 pt-2">
                 <button
                   type="button"
@@ -244,7 +264,7 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="px-5 py-2.5 text-xs font-bold rounded-xl bg-brand-500 hover:bg-brand-600 text-white shadow-md shadow-brand-500/20 flex items-center gap-1.5 disabled:opacity-50"
+                  className="px-5 py-2.5 text-xs font-bold rounded-xl bg-brand-600 hover:bg-brand-700 text-white shadow-md shadow-brand-500/20 flex items-center gap-1.5 disabled:opacity-50"
                 >
                   {isLoading ? (
                     <>
@@ -308,7 +328,7 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="px-5 py-2.5 text-xs font-bold rounded-xl bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/20 flex items-center gap-1.5 disabled:opacity-50"
+                  className="px-5 py-2.5 text-xs font-bold rounded-xl bg-amber-700 hover:bg-amber-800 text-white shadow-md shadow-amber-500/20 flex items-center gap-1.5 disabled:opacity-50"
                 >
                   {isLoading ? (
                     <>
@@ -334,7 +354,7 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
                 <span>Đồng Bộ Sang Điện Thoại Không Cần Nhập Token</span>
               </div>
               <p className="text-xs text-slate-500 max-w-sm">
-                Mở ứng dụng <strong>Camera</strong> hoặc <strong>Zalo</strong> trên điện thoại, hướng vào mã QR bên dưới để tự động đăng nhập!
+                Quét bằng Camera iPhone, mở link trong Safari rồi bấm <strong>Chia sẻ → Thêm vào Màn hình chính</strong>. Shortcut mới sẽ tự nhận Token ở lần mở đầu tiên.
               </p>
 
               <div className="w-full p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-left text-[11px] text-amber-800 dark:text-amber-200">
@@ -356,7 +376,7 @@ export default function TokenModal({ currentToken, onClose, onSave }) {
                     </div>
                   )}
                   <span className="text-[11px] text-slate-400 font-medium mt-2">
-                    Quét mã để kích hoạt Fanpage trên Mobile
+                    Quét → mở Safari → thêm shortcut ngay từ trang đó
                   </span>
                 </div>
               ) : (

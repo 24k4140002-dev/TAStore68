@@ -16,6 +16,7 @@ import {
   DollarSign,
   ExternalLink,
   ChevronRight,
+  ChevronDown,
   X,
   Grid,
   CloudOff
@@ -49,6 +50,10 @@ export default function CustomerProfilePanel({
   const [newNoteText, setNewNoteText] = useState('');
   const [isAddingNote, setIsAddingNote] = useState(false);
   const [isAllGalleryOpen, setIsAllGalleryOpen] = useState(false);
+  const [isLabelPickerOpen, setIsLabelPickerOpen] = useState(false);
+  const [labelSearch, setLabelSearch] = useState('');
+  const [pendingLabelKey, setPendingLabelKey] = useState('');
+  const [labelError, setLabelError] = useState('');
 
   if (!conversation) return null;
 
@@ -86,15 +91,53 @@ export default function CustomerProfilePanel({
     }
   };
 
-  const handleAddLabelSelect = (label) => {
-    if (onAddLabel) onAddLabel(label);
-  };
-
-  const currentLabels = conversation.labels || [];
+  const currentLabels = (conversation.labels || []).filter(label => (
+    !label.page_id || label.page_id === conversation.page_id
+  ));
   const leadStage = customerData?.lead_stage || 'potential';
+  const labelsForCurrentPage = (allLabels || []).filter(label => (
+    !label.page_id || label.page_id === conversation.page_id
+  ));
+  const availableLabels = [...labelsForCurrentPage.reduce((labelsByName, label) => {
+    const key = (label.name || '').trim().toLocaleLowerCase('vi-VN');
+    if (!key) return labelsByName;
+    const existing = labelsByName.get(key);
+    if (!existing || label.page_id === conversation.page_id) labelsByName.set(key, label);
+    return labelsByName;
+  }, new Map()).values()];
+  const normalizedLabelSearch = labelSearch.trim().toLocaleLowerCase('vi-VN');
+  const visibleAvailableLabels = availableLabels.filter(label => (
+    !normalizedLabelSearch || label.name?.toLocaleLowerCase('vi-VN').includes(normalizedLabelSearch)
+  ));
+  const getLabelKey = label => String(label.id || label.name || '');
+  const isLabelAssigned = label => currentLabels.some(current => (
+    current.id === label.id || current.name?.trim().toLocaleLowerCase('vi-VN') === label.name?.trim().toLocaleLowerCase('vi-VN')
+  ));
+  const handleLabelToggle = async (label) => {
+    const labelKey = getLabelKey(label);
+    if (!labelKey || pendingLabelKey) return;
+    setPendingLabelKey(labelKey);
+    setLabelError('');
+    try {
+      if (isLabelAssigned(label)) {
+        await onRemoveLabel?.(label.id || label.name);
+      } else {
+        await onAddLabel?.(label);
+      }
+    } catch (error) {
+      setLabelError(error?.message || 'Meta chưa xác nhận thay đổi nhãn. Vui lòng thử lại.');
+    } finally {
+      setPendingLabelKey('');
+    }
+  };
+  const leadStageSourceText = customerData?.lead_stage_source === 'meta_auto'
+    ? '☁ Đồng bộ từ nhãn tự động của Meta'
+    : customerData?.lead_stage_source === 'manual'
+      ? '✍ Đã chỉnh thủ công trên thiết bị này'
+      : '📱 Đang lưu trên thiết bị này';
 
   return (
-    <aside className="w-80 lg:w-88 flex-shrink-0 flex flex-col border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-y-auto select-none divide-y divide-slate-100 dark:divide-slate-800/80 text-xs sm:text-[13px]">
+    <aside className="w-full xl:w-80 2xl:w-88 min-w-0 flex-shrink-0 flex flex-col border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-y-auto overscroll-contain pb-[max(1rem,env(safe-area-inset-bottom))] select-none divide-y divide-slate-100 dark:divide-slate-800/80 text-xs sm:text-[13px]">
       {/* 1. Profile Header */}
       <div className="p-4 space-y-3">
         <div className="flex items-center gap-3">
@@ -120,7 +163,7 @@ export default function CustomerProfilePanel({
 
         <div className="flex items-start gap-2 rounded-xl border border-amber-200/80 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-300">
           <CloudOff className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-          <span>Đơn hàng, ghi chú và giai đoạn khách hiện chỉ lưu trên thiết bị này. Tin nhắn và nhãn Facebook mới được đồng bộ với Meta.</span>
+          <span>Đơn hàng và ghi chú vẫn lưu trên thiết bị này. Nhãn Facebook và giai đoạn do Meta tự động nhận diện sẽ được đồng bộ từ Meta.</span>
         </div>
 
         {/* Source badge */}
@@ -191,7 +234,7 @@ export default function CustomerProfilePanel({
             <button
               key={stage.id}
               onClick={() => onUpdateLeadStage && onUpdateLeadStage(stage.id)}
-              className={`p-2 rounded-xl text-center font-bold border transition-smooth text-xs ${
+                className={`min-h-10 p-2 rounded-xl text-center font-bold border transition-smooth text-xs ${
                 leadStage === stage.id
                   ? 'bg-purple-50 dark:bg-purple-950/50 border-purple-300 dark:border-purple-800 text-purple-700 dark:text-purple-300 ring-1 ring-purple-400'
                   : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50'
@@ -201,6 +244,13 @@ export default function CustomerProfilePanel({
             </button>
           ))}
         </div>
+        <p className={`rounded-lg px-2.5 py-1.5 text-[10px] font-semibold ${
+          customerData?.lead_stage_source === 'meta_auto'
+            ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300'
+            : 'bg-slate-50 text-slate-500 dark:bg-slate-800/60 dark:text-slate-400'
+        }`}>
+          {leadStageSourceText}
+        </p>
       </div>
 
       {/* 4. Nhãn & Gắn Tag Khách Hàng (Labels & Quick Tagging) */}
@@ -222,7 +272,7 @@ export default function CustomerProfilePanel({
 
         {/* Assigned labels */}
         <div className="space-y-1.5">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Nhãn Đã Gắn:</span>
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Nhãn đã gắn ({currentLabels.length}):</span>
           <div className="flex flex-wrap gap-1.5 min-h-[26px] items-center">
             {currentLabels.length > 0 ? (
               currentLabels.map((lbl, lIdx) => (
@@ -233,8 +283,12 @@ export default function CustomerProfilePanel({
                 >
                   <span>{lbl.emoji || '🏷️'}</span>
                   <span>{lbl.name}</span>
+                  {(lbl.source === 'meta' || lbl.source === 'meta_auto') && (
+                    <span className="text-[9px] opacity-80" title="Đồng bộ từ Meta">☁</span>
+                  )}
                   <button
-                    onClick={() => onRemoveLabel && onRemoveLabel(lbl.id)}
+                    onClick={() => handleLabelToggle(lbl)}
+                    disabled={Boolean(pendingLabelKey)}
                     className="hover:opacity-75 ml-1 text-xs font-black"
                     title="Gỡ nhãn này"
                   >
@@ -248,39 +302,62 @@ export default function CustomerProfilePanel({
           </div>
         </div>
 
-        {/* All Available Labels to Toggle */}
-        {allLabels && allLabels.length > 0 ? (
+        {labelError && (
+          <p className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[11px] font-semibold text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-300">
+            {labelError}
+          </p>
+        )}
+
+        {/* Page-scoped label picker */}
+        {availableLabels.length > 0 ? (
           <div className="space-y-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Gắn / Gỡ Nhãn Nhanh:</span>
-            <div className="flex flex-wrap gap-1.5">
-              {allLabels.map((lbl) => {
-                const isAssigned = currentLabels.some(l => l.id === lbl.id || l.name === lbl.name);
+            <button
+              type="button"
+              onClick={() => setIsLabelPickerOpen(open => !open)}
+              className="flex min-h-9 w-full items-center justify-between rounded-lg border border-slate-200 px-2.5 py-1.5 text-left text-xs font-bold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <span>Chọn nhãn của Page ({availableLabels.length})</span>
+              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isLabelPickerOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {isLabelPickerOpen && (
+              <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-2 dark:border-slate-700 dark:bg-slate-800/40">
+                <input
+                  value={labelSearch}
+                  onChange={event => setLabelSearch(event.target.value)}
+                  placeholder="Tìm nhãn đúng sản phẩm..."
+                  className="h-9 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs outline-none focus:border-brand-400 dark:border-slate-700 dark:bg-slate-900"
+                />
+                <p className="text-[10px] text-slate-500">Nút màu nhạt là nhãn có thể gắn; chỉ nhãn có dấu ✓ mới đang gắn.</p>
+                <div className="flex max-h-52 flex-wrap gap-1.5 overflow-y-auto">
+              {visibleAvailableLabels.map((lbl) => {
+                const isAssigned = isLabelAssigned(lbl);
+                const isPending = pendingLabelKey === getLabelKey(lbl);
                 return (
                   <button
-                    key={lbl.id}
-                    onClick={() => {
-                      if (isAssigned) {
-                        onRemoveLabel && onRemoveLabel(lbl.id);
-                      } else {
-                        onAddLabel && onAddLabel(lbl);
-                      }
-                    }}
-                    className={`px-2.5 py-1 rounded-lg font-bold text-xs flex items-center gap-1 transition-all duration-150 border ${
+                    key={`${lbl.page_id || 'default'}_${lbl.id || lbl.name}`}
+                    onClick={() => handleLabelToggle(lbl)}
+                    disabled={Boolean(pendingLabelKey)}
+                    className={`min-h-9 px-2.5 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1 transition-all duration-150 border ${
                       isAssigned
                         ? 'ring-2 ring-brand-500 text-white shadow-xs border-transparent'
-                        : 'opacity-65 hover:opacity-100 text-white border-transparent'
+                        : 'bg-white text-slate-600 border-slate-200 hover:border-brand-300 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-700'
                     }`}
-                    style={{ background: lbl.color || '#64748b' }}
+                    style={isAssigned ? { background: lbl.color || '#64748b' } : undefined}
                   >
                     <span>{lbl.emoji || '🏷️'}</span>
                     <span>{lbl.name}</span>
                     <span className="text-[10px] ml-0.5 font-black">
-                      {isAssigned ? '✓' : '+'}
+                      {isPending ? '…' : isAssigned ? '✓' : '+'}
                     </span>
                   </button>
                 );
               })}
-            </div>
+                {visibleAvailableLabels.length === 0 && (
+                  <span className="py-2 text-[11px] italic text-slate-400">Không tìm thấy nhãn phù hợp.</span>
+                )}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-1.5 pt-1 border-t border-slate-100 dark:border-slate-800">
@@ -295,7 +372,7 @@ export default function CustomerProfilePanel({
                       if (isAssigned) {
                         onRemoveLabel && onRemoveLabel(sug.id || sug.name);
                       } else {
-                        handleAddLabelSelect(sug);
+                        handleLabelToggle(sug);
                       }
                     }}
                     className={`px-2 py-1 rounded-md text-xs font-semibold transition-smooth border flex items-center gap-1 ${

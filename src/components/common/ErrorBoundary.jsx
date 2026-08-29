@@ -35,7 +35,7 @@ export default class ErrorBoundary extends React.Component {
           </p>
           <button
             onClick={this.handleReload}
-            className="px-5 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 active:scale-95 text-white text-xs font-bold shadow-lg shadow-brand-500/30 flex items-center gap-2 transition-all cursor-pointer"
+            className="px-5 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-700 active:scale-95 text-white text-xs font-bold shadow-lg shadow-brand-500/30 flex items-center gap-2 transition-all cursor-pointer"
           >
             <RefreshCw className="w-4 h-4" />
             <span>Tải Lại Giao Diện</span>

@@ -28,9 +28,27 @@ import {
   getFacebookPostUrl,
   getPageDisplayName
 } from '../../services/facebookApi';
+import { classifyMetaPublishError, createPublishSnapshot, getConfirmedPostId } from '../../services/publishOutcome';
+import {
+  MAX_IMAGE_BYTES,
+  MAX_POST_PHOTOS,
+  MAX_RAW_IMAGE_BYTES,
+  STABLE_POST_PHOTOS,
+  MAX_VIDEO_BYTES,
+  filterVisiblePages,
+  parseStoredArray,
+  validatePostDraft
+} from '../../utils/postStudio';
+
+function getConfiguredPages(allPages) {
+  return filterVisiblePages(
+    allPages,
+    parseStoredArray(localStorage.getItem('metapost_visible_page_ids'))
+  );
+}
 
 export default function PostStudio({ fbToken }) {
-  const [pages, setPages] = useState(() => JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]'));
+  const [pages, setPages] = useState(() => getConfiguredPages(parseStoredArray(localStorage.getItem('metapost_pages_cache'))));
   const [selectedPageIds, setSelectedPageIds] = useState([]);
   const [postType, setPostType] = useState('photo'); // 'photo' | 'text' | 'video'
   const [postContent, setPostContent] = useState('');
@@ -41,7 +59,7 @@ export default function PostStudio({ fbToken }) {
   const [mediaPreviews, setMediaPreviews] = useState([]); // Array of { url, type, name, size }
   const [isCompressing, setIsCompressing] = useState(false);
   const [autoCompress, setAutoCompress] = useState(true);
-  const [smartAntiSpam, setSmartAntiSpam] = useState(true);
+  const [composerError, setComposerError] = useState('');
 
   // Scheduling & Delay
   const [isScheduled, setIsScheduled] = useState(false);
@@ -55,11 +73,13 @@ export default function PostStudio({ fbToken }) {
   const [pageResults, setPageResults] = useState([]); // Array of { pageId, pageName, avatar, status: 'pending'|'running'|'success'|'error', postId, error }
   const [failedPages, setFailedPages] = useState([]);
   const cancelRequestedRef = useRef(false);
+  const publishSnapshotRef = useRef(null);
+  const mediaPreviewsRef = useRef([]);
 
   // Templates & History
-  const [templates, setTemplates] = useState(() => JSON.parse(localStorage.getItem('metapost_templates') || '[]'));
+  const [templates, setTemplates] = useState(() => parseStoredArray(localStorage.getItem('metapost_templates')));
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
-  const [history, setHistory] = useState(() => JSON.parse(localStorage.getItem('metapost_history') || '[]'));
+  const [history, setHistory] = useState(() => parseStoredArray(localStorage.getItem('metapost_history')));
   const [mobileTab, setMobileTab] = useState('composer'); // 'pages' | 'composer'
 
   const fileInputRef = useRef(null);
@@ -69,12 +89,24 @@ export default function PostStudio({ fbToken }) {
     if (fbToken) {
       fetchPages(fbToken).then(res => {
         if (res.length > 0) {
-          setPages(res);
+          const configuredPages = getConfiguredPages(res);
+          setPages(configuredPages);
+          setSelectedPageIds(prev => prev.filter(id => configuredPages.some(page => page.id === id)));
           localStorage.setItem('metapost_pages_cache', JSON.stringify(res));
         }
+      }).catch(error => {
+        setComposerError(error.message || 'Không thể nạp danh sách Fanpage từ Meta.');
       });
     }
   }, [fbToken]);
+
+  useEffect(() => {
+    mediaPreviewsRef.current = mediaPreviews;
+  }, [mediaPreviews]);
+
+  useEffect(() => () => {
+    mediaPreviewsRef.current.forEach(item => item.url && URL.revokeObjectURL(item.url));
+  }, []);
 
   // Page selection helpers
   const handleSelectAllPages = () => {
@@ -95,11 +127,41 @@ export default function PostStudio({ fbToken }) {
   const handleMediaUpload = async (e) => {
     const rawFiles = Array.from(e.target.files || []);
     if (rawFiles.length === 0) return;
+    const rejectFiles = (message) => {
+      setComposerError(message);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    };
 
+    const expectedPrefix = postType === 'video' ? 'video/' : 'image/';
+    const validFiles = rawFiles.filter(file => file.type?.startsWith(expectedPrefix));
+    if (validFiles.length !== rawFiles.length) {
+      rejectFiles(postType === 'video' ? 'Chỉ nhận tệp video.' : 'Chỉ nhận tệp hình ảnh.');
+      return;
+    }
+    if (postType === 'photo' && mediaFiles.length + validFiles.length > MAX_POST_PHOTOS) {
+      rejectFiles(`Chế độ thử nghiệm nhận tối đa ${MAX_POST_PHOTOS} ảnh mỗi bài.`);
+      return;
+    }
+    const oversized = validFiles.find(file => file.size > (postType === 'video' ? MAX_VIDEO_BYTES : MAX_RAW_IMAGE_BYTES));
+    if (oversized) {
+      rejectFiles(postType === 'video'
+        ? `Video “${oversized.name}” vượt quá 500 MB.`
+        : `Ảnh “${oversized.name}” vượt quá 30 MB.`);
+      return;
+    }
+
+    const existingNames = new Set(mediaFiles.map(file => file.name));
+    const uniqueFiles = validFiles.filter(file => !existingNames.has(file.name));
+    if (uniqueFiles.length === 0) {
+      rejectFiles('Các tệp này đã được chọn rồi.');
+      return;
+    }
+
+    setComposerError('');
     setIsCompressing(true);
     try {
       const processed = [];
-      for (const file of rawFiles) {
+      for (const file of uniqueFiles) {
         if (file.type.startsWith('image/') && autoCompress) {
           const compressed = await compressImage(file, 1920, 0.82);
           processed.push(compressed);
@@ -108,9 +170,15 @@ export default function PostStudio({ fbToken }) {
         }
       }
 
+      const processedOversized = processed.find(file => file.type.startsWith('image/') && file.size > MAX_IMAGE_BYTES);
+      if (processedOversized) {
+        setComposerError(`Ảnh “${processedOversized.name}” vẫn vượt quá 10 MB sau khi xử lý.`);
+        return;
+      }
+
       if (postType === 'video') {
-        // Only keep 1 video
-        const vid = processed.find(f => f.type.startsWith('video/')) || processed[0];
+        const vid = processed[0];
+        mediaPreviews.forEach(item => item.url && URL.revokeObjectURL(item.url));
         setMediaFiles([vid]);
         setMediaPreviews([{ url: URL.createObjectURL(vid), type: vid.type, name: vid.name, size: vid.size }]);
       } else {
@@ -124,10 +192,21 @@ export default function PostStudio({ fbToken }) {
         }));
         setMediaPreviews(prev => [...prev, ...newPreviews]);
       }
+    } catch (error) {
+      setComposerError(error.message || 'Không thể xử lý tệp đã chọn.');
     } finally {
       setIsCompressing(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  const handlePostTypeChange = (nextType) => {
+    if (nextType === postType) return;
+    mediaPreviews.forEach(item => item.url && URL.revokeObjectURL(item.url));
+    setMediaFiles([]);
+    setMediaPreviews([]);
+    setComposerError('');
+    setPostType(nextType);
   };
 
   const handleRemoveMedia = (index) => {
@@ -173,7 +252,18 @@ export default function PostStudio({ fbToken }) {
   };
 
   // Execute Publishing Loop
-  const executePublishLoop = async (targetPagesToPublish) => {
+  const executePublishLoop = async (targetPagesToPublish, suppliedSnapshot) => {
+    const snapshot = suppliedSnapshot || createPublishSnapshot({
+      postType,
+      postText: postContent,
+      postLink,
+      mediaFiles,
+      isScheduled,
+      scheduleTimestamp: isScheduled && scheduleTime
+        ? Math.floor(new Date(scheduleTime).getTime() / 1000)
+        : null
+    });
+    publishSnapshotRef.current = snapshot;
     setIsPublishing(true);
     setShowProgressModal(true);
     cancelRequestedRef.current = false;
@@ -181,23 +271,19 @@ export default function PostStudio({ fbToken }) {
     // Initialize page results table
     const initialRows = targetPagesToPublish.map(p => ({
       pageId: p.id,
-      pageName: p.name,
+      pageName: getPageDisplayName(p, pages),
       avatar: p.picture?.data?.url || '',
       status: 'pending',
       postId: null,
-      error: ''
+      error: '',
+      errorDetails: null
     }));
     setPageResults(initialRows);
 
     let successCount = 0;
     let failCount = 0;
     const failedList = [];
-    let scheduleUnix = null;
-
-    if (isScheduled && scheduleTime) {
-      scheduleUnix = Math.floor(new Date(scheduleTime).getTime() / 1000);
-    }
-
+    const failureDetails = [];
     for (let i = 0; i < targetPagesToPublish.length; i++) {
       if (cancelRequestedRef.current) {
         break;
@@ -217,19 +303,24 @@ export default function PostStudio({ fbToken }) {
 
       try {
         const res = await publishToFacebookPage(page, {
-          postType,
-          postText: postContent,
-          postLink,
-          mediaFiles,
-          isScheduled,
-          scheduleTimestamp: scheduleUnix,
-          smartAntiSpam,
-          pageIndex: i,
-          totalPages: targetPagesToPublish.length
+          postType: snapshot.postType,
+          postText: snapshot.postText,
+          postLink: snapshot.postLink,
+          mediaFiles: snapshot.mediaFiles,
+          isScheduled: snapshot.isScheduled,
+          scheduleTimestamp: snapshot.scheduleTimestamp,
+          onMediaProgress: snapshot.mediaFiles.length > 1
+            ? (uploaded, total) => setPublishProgress({
+                percent: Math.round(((i + uploaded / total) / targetPagesToPublish.length) * 100),
+                status: `Đang tải ảnh ${uploaded}/${total} lên ${page.name}...`,
+                success: successCount,
+                fail: failCount
+              })
+            : undefined
         });
 
+        const postId = getConfirmedPostId(res);
         successCount++;
-        const postId = res?.id || res?.post_id || 'OK';
 
         setPageResults(prev => prev.map(r =>
           r.pageId === page.id
@@ -238,10 +329,16 @@ export default function PostStudio({ fbToken }) {
         ));
       } catch (err) {
         failCount++;
-        failedList.push(page);
+        const failure = classifyMetaPublishError(err);
+        failedList.push({ ...page, lastPublishFailure: failure });
+        failureDetails.push({
+          pageId: page.id,
+          pageName: getPageDisplayName(page, pages),
+          ...failure
+        });
         setPageResults(prev => prev.map(r =>
           r.pageId === page.id
-            ? { ...r, status: 'error', error: err.message }
+            ? { ...r, status: 'error', error: failure.message, errorDetails: failure }
             : r
         ));
       }
@@ -271,12 +368,13 @@ export default function PostStudio({ fbToken }) {
     // Save history
     const historyEntry = {
       id: 'post_' + Date.now(),
-      content: postContent,
-      type: postType,
-      mediaCount: mediaFiles.length,
+      content: snapshot.postText,
+      type: snapshot.postType,
+      mediaCount: snapshot.mediaFiles.length,
       total: targetPagesToPublish.length,
       success: successCount,
       fail: failCount,
+      failures: failureDetails,
       time: new Date().toISOString()
     };
     const updatedHistory = [historyEntry, ...history.slice(0, 29)];
@@ -287,17 +385,43 @@ export default function PostStudio({ fbToken }) {
   };
 
   const handleStartPublish = () => {
-    if (selectedPageIds.length === 0) {
-      alert('Vui lòng chọn ít nhất 1 Fanpage để đăng bài!');
-      return;
-    }
-    if (!postContent.trim() && mediaFiles.length === 0 && !postLink.trim()) {
-      alert('Vui lòng nhập nội dung bài viết hoặc chọn ảnh/video đính kèm!');
+    const validationError = validatePostDraft({
+      selectedPageIds,
+      postType,
+      postContent,
+      postLink,
+      mediaFiles,
+      isScheduled,
+      scheduleTime
+    });
+    if (validationError) {
+      setComposerError(validationError);
       return;
     }
 
     const targetPages = pages.filter(p => selectedPageIds.includes(p.id));
-    executePublishLoop(targetPages);
+    if (targetPages.length !== selectedPageIds.length) {
+      setSelectedPageIds(targetPages.map(page => page.id));
+      setComposerError('Danh sách Page vừa thay đổi. Vui lòng kiểm tra lại trước khi đăng.');
+      return;
+    }
+    const actionLabel = isScheduled ? `lên lịch cho ${targetPages.length} Page` : `đăng ngay lên ${targetPages.length} Page`;
+    const experimentalWarning = postType === 'photo' && mediaFiles.length > STABLE_POST_PHOTOS
+      ? `\n\nBạn đang thử ${mediaFiles.length} ảnh/bài. Meta có nhận attached_media nhưng không công bố giới hạn số ảnh; yêu cầu vẫn có thể bị từ chối. Nên thử trên 1 Page trước.`
+      : '';
+    if (!window.confirm(`Xác nhận ${actionLabel}?${experimentalWarning}`)) return;
+    setComposerError('');
+    const snapshot = createPublishSnapshot({
+      postType,
+      postText: postContent,
+      postLink,
+      mediaFiles,
+      isScheduled,
+      scheduleTimestamp: isScheduled && scheduleTime
+        ? Math.floor(new Date(scheduleTime).getTime() / 1000)
+        : null
+    });
+    executePublishLoop(targetPages, snapshot);
   };
 
   const handleCancelPublish = () => {
@@ -305,12 +429,21 @@ export default function PostStudio({ fbToken }) {
   };
 
   const handleRetryFailed = () => {
-    if (failedPages.length === 0) return;
-    const toRetry = [...failedPages];
-    executePublishLoop(toRetry);
+    const toRetry = failedPages.filter(page => page.lastPublishFailure?.retryable);
+    if (toRetry.length === 0) return;
+    const snapshot = publishSnapshotRef.current;
+    if (!snapshot) {
+      setComposerError('Không còn bản nội dung gốc để thử lại an toàn. Hãy kiểm tra và tạo lượt đăng mới.');
+      return;
+    }
+    if (!window.confirm(toRetry.some(page => page.lastPublishFailure?.outcomeUnknown)
+      ? 'Có Page chưa rõ đã đăng thành công hay chưa. Bạn đã kiểm tra trên Meta và xác nhận chưa có bài trùng? Lần thử lại sẽ dùng nguyên nội dung, ảnh và lịch của lượt đăng trước.'
+      : `Chỉ thử lại ${toRetry.length} Page tạm lỗi bằng nguyên nội dung, ảnh và lịch của lượt đăng trước? Các chỉnh sửa hiện tại sẽ không được dùng.`)) return;
+    executePublishLoop(toRetry, snapshot);
   };
 
   const targetPagesCount = selectedPageIds.length;
+  const retryableFailedPages = failedPages.filter(page => page.lastPublishFailure?.retryable);
 
   return (
     <div className="flex-1 flex flex-col md:flex-row overflow-hidden h-full bg-slate-50 dark:bg-slate-950">
@@ -320,7 +453,7 @@ export default function PostStudio({ fbToken }) {
           onClick={() => setMobileTab('pages')}
           className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
             mobileTab === 'pages'
-              ? 'bg-brand-500 text-white shadow-sm'
+              ? 'bg-brand-600 text-white shadow-sm'
               : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
           }`}
         >
@@ -333,7 +466,7 @@ export default function PostStudio({ fbToken }) {
           onClick={() => setMobileTab('composer')}
           className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
             mobileTab === 'composer'
-              ? 'bg-brand-500 text-white shadow-sm'
+              ? 'bg-brand-600 text-white shadow-sm'
               : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
           }`}
         >
@@ -353,9 +486,10 @@ export default function PostStudio({ fbToken }) {
           </div>
           <button
             onClick={handleSelectAllPages}
+            disabled={pages.length === 0}
             className="text-xs font-bold text-brand-500 hover:underline"
           >
-            {selectedPageIds.length === pages.length ? 'Bỏ chọn hết' : 'Chọn tất cả'}
+            {pages.length > 0 && selectedPageIds.length === pages.length ? 'Bỏ chọn hết' : 'Chọn tất cả'}
           </button>
         </div>
 
@@ -406,7 +540,7 @@ export default function PostStudio({ fbToken }) {
         <div className="p-3 border-t border-slate-200 dark:border-slate-800 md:hidden bg-slate-50 dark:bg-slate-900/50">
           <button
             onClick={() => setMobileTab('composer')}
-            className="w-full py-2.5 rounded-xl bg-brand-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-brand-500/20"
+            className="w-full py-2.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-brand-500/20"
           >
             <span>Tiếp tục soạn bài ({selectedPageIds.length} Page)</span>
             <span>→</span>
@@ -428,11 +562,11 @@ export default function PostStudio({ fbToken }) {
             </h2>
 
             {/* Post Type Selector (Photo / Video / Text) */}
-            <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs font-bold">
+            <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-[11px] sm:text-xs font-bold">
               <button
                 type="button"
-                onClick={() => setPostType('photo')}
-                className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-smooth ${
+                onClick={() => handlePostTypeChange('photo')}
+                className={`min-w-0 px-1 sm:px-3 py-1.5 rounded-lg flex items-center justify-center gap-1 sm:gap-1.5 transition-smooth ${
                   postType === 'photo' ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-xs' : 'text-slate-500'
                 }`}
               >
@@ -440,8 +574,8 @@ export default function PostStudio({ fbToken }) {
               </button>
               <button
                 type="button"
-                onClick={() => setPostType('video')}
-                className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-smooth ${
+                onClick={() => handlePostTypeChange('video')}
+                className={`min-w-0 px-1 sm:px-3 py-1.5 rounded-lg flex items-center justify-center gap-1 sm:gap-1.5 transition-smooth ${
                   postType === 'video' ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-xs' : 'text-slate-500'
                 }`}
               >
@@ -449,8 +583,8 @@ export default function PostStudio({ fbToken }) {
               </button>
               <button
                 type="button"
-                onClick={() => setPostType('text')}
-                className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-smooth ${
+                onClick={() => handlePostTypeChange('text')}
+                className={`min-w-0 px-1 sm:px-3 py-1.5 rounded-lg flex items-center justify-center gap-1 sm:gap-1.5 transition-smooth ${
                   postType === 'text' ? 'bg-white dark:bg-slate-700 text-brand-600 dark:text-white shadow-xs' : 'text-slate-500'
                 }`}
               >
@@ -460,11 +594,11 @@ export default function PostStudio({ fbToken }) {
           </div>
 
           {/* Templates Selector Bar */}
-          <div className="flex items-center gap-2 pt-1">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-1">
             <select
               value={selectedTemplateId}
               onChange={(e) => handleSelectTemplate(e.target.value)}
-              className="flex-1 px-3 py-1.5 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 text-slate-800 dark:text-slate-200 focus:ring-2 focus:ring-brand-500"
+              className="w-full min-w-0 sm:flex-1 px-3 py-2 sm:py-1.5 text-xs font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 text-slate-800 dark:text-slate-200 focus:ring-2 focus:ring-brand-500"
             >
               <option value="">-- Chọn bài mẫu đã lưu ({templates.length}) --</option>
               {templates.map(t => (
@@ -476,7 +610,7 @@ export default function PostStudio({ fbToken }) {
             <button
               type="button"
               onClick={handleSaveTemplate}
-              className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1 transition-smooth flex-shrink-0"
+              className="w-full sm:w-auto px-3 py-2 sm:py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-center gap-1 transition-smooth flex-shrink-0"
               title="Lưu nội dung đang soạn thành mẫu mới"
             >
               <Bookmark className="w-3.5 h-3.5 text-amber-500" /> Lưu mẫu
@@ -487,7 +621,7 @@ export default function PostStudio({ fbToken }) {
           <div>
             <textarea
               rows="5"
-              placeholder="Nhập nội dung bài đăng... (Hỗ trợ hashtag, emoji, xuống dòng, tự động gắn mã chống trùng lặp)"
+              placeholder="Nhập nội dung bài đăng... (Hỗ trợ hashtag, emoji và xuống dòng)"
               value={postContent}
               onChange={(e) => setPostContent(e.target.value)}
               className="w-full p-4 text-[16px] sm:text-sm leading-relaxed rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500 transition-smooth resize-none"
@@ -520,13 +654,20 @@ export default function PostStudio({ fbToken }) {
             </div>
           )}
 
+          {composerError && (
+            <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300">
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <span>{composerError}</span>
+            </div>
+          )}
+
           {/* Media Upload & Preview Section */}
           {postType !== 'text' && (
             <div>
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                    {postType === 'video' ? 'Video đính kèm' : `Ảnh đính kèm (${mediaPreviews.length})`}
+                    {postType === 'video' ? 'Video đính kèm' : `Ảnh đính kèm (${mediaPreviews.length}/${MAX_POST_PHOTOS})`}
                   </span>
                   {isCompressing && (
                     <span className="text-[11px] text-amber-500 font-bold flex items-center gap-1 animate-pulse">
@@ -546,6 +687,12 @@ export default function PostStudio({ fbToken }) {
                   />
                 </label>
               </div>
+
+              {postType === 'photo' && (
+                <p className={`mb-2 text-[11px] ${mediaPreviews.length > STABLE_POST_PHOTOS ? 'font-semibold text-amber-600 dark:text-amber-400' : 'text-slate-400'}`}>
+                  Tối đa 50 ảnh. Từ 11–50 ảnh là thử nghiệm Meta API; có thể khác nhau theo Page và thời điểm.
+                </p>
+              )}
 
               {mediaPreviews.length > 0 ? (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -586,12 +733,12 @@ export default function PostStudio({ fbToken }) {
             </div>
           )}
 
-          {/* Posting Options: Delay, Anti-Spam & Schedule */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
+          {/* Posting Options: Delay & Schedule */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
             {/* Safe Delay */}
             <div>
               <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                Giãn cách an toàn (Safe Delay)
+                Khoảng cách giữa các Page
               </label>
               <div className="flex items-center gap-2">
                 <input
@@ -604,20 +751,7 @@ export default function PostStudio({ fbToken }) {
                 />
                 <span className="font-bold text-slate-700 dark:text-slate-300 w-8">{delaySeconds}s</span>
               </div>
-            </div>
-
-            {/* Smart Anti-Spam Checkbox */}
-            <div className="flex items-center gap-2 pt-2 md:pt-4">
-              <input
-                type="checkbox"
-                id="chkAntiSpam"
-                checked={smartAntiSpam}
-                onChange={(e) => setSmartAntiSpam(e.target.checked)}
-                className="w-4 h-4 rounded text-brand-500 focus:ring-brand-500"
-              />
-              <label htmlFor="chkAntiSpam" className="font-bold text-slate-700 dark:text-slate-300 cursor-pointer">
-                Smart Anti-Spam (Chống quét trùng lặp)
-              </label>
+              <p className="mt-1 text-[10px] text-slate-400">Chỉ giảm dồn request; không bảo đảm tránh hệ thống chống spam của Meta.</p>
             </div>
 
             {/* Schedule */}
@@ -636,6 +770,7 @@ export default function PostStudio({ fbToken }) {
               {isScheduled && (
                 <input
                   type="datetime-local"
+                  aria-label="Ngày giờ đăng bài"
                   value={scheduleTime}
                   onChange={(e) => setScheduleTime(e.target.value)}
                   className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white"
@@ -648,8 +783,8 @@ export default function PostStudio({ fbToken }) {
           <div className="pt-2">
             <button
               onClick={handleStartPublish}
-              disabled={isPublishing || targetPagesCount === 0}
-              className="w-full py-3.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white font-extrabold text-sm shadow-lg shadow-brand-500/25 flex items-center justify-center gap-2 transition-smooth disabled:opacity-50 active:scale-[0.99]"
+              disabled={isPublishing || isCompressing || targetPagesCount === 0}
+              className="w-full py-3.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white font-extrabold text-sm shadow-lg shadow-brand-500/25 flex items-center justify-center gap-2 transition-smooth disabled:opacity-50 active:scale-[0.99]"
             >
               <Send className="w-4 h-4" />
               <span>{isScheduled ? 'Lên Lịch Đăng Cho' : 'Đăng Bài Ngay Lên'} {targetPagesCount} Fanpage Đã Chọn</span>
@@ -733,7 +868,8 @@ export default function PostStudio({ fbToken }) {
             {/* Per-Page Status List */}
             <div className="flex-1 overflow-y-auto px-6 py-2 space-y-2 divide-y divide-slate-100 dark:divide-slate-800/60 touch-scroll-y">
               {pageResults.map((row) => (
-                <div key={row.pageId} className="pt-2 flex items-center justify-between text-xs">
+                <div key={row.pageId} className="pt-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5 min-w-0 pr-2">
                     <div className="w-7 h-7 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden flex items-center justify-center font-bold text-[10px] flex-shrink-0">
                       {row.avatar ? <img src={row.avatar} alt="" className="w-full h-full object-cover" /> : '🚩'}
@@ -773,6 +909,18 @@ export default function PostStudio({ fbToken }) {
                       </span>
                     )}
                   </div>
+                  </div>
+                  {row.status === 'error' && row.errorDetails && (
+                    <div className="ml-9 mt-1.5 rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[11px] leading-relaxed text-red-800 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-200">
+                      <p className="font-extrabold">
+                        {row.errorDetails.reference}
+                        {row.errorDetails.mediaIndex ? ` • ảnh ${row.errorDetails.mediaIndex}` : ''}
+                        {` • ${row.errorDetails.stage}`}
+                      </p>
+                      <p className="mt-0.5 break-words">{row.errorDetails.message}</p>
+                      <p className="mt-1 font-semibold">{row.errorDetails.hint}</p>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -789,14 +937,19 @@ export default function PostStudio({ fbToken }) {
                 </button>
               ) : (
                 <div className="flex items-center gap-2">
-                  {failedPages.length > 0 && (
+                  {retryableFailedPages.length > 0 && (
                     <button
                       type="button"
                       onClick={handleRetryFailed}
-                      className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20"
+                      className="px-4 py-2 rounded-xl bg-amber-700 hover:bg-amber-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20"
                     >
-                      <RotateCcw className="w-3.5 h-3.5" /> Thử lại {failedPages.length} Page lỗi
+                      <RotateCcw className="w-3.5 h-3.5" /> Thử lại {retryableFailedPages.length} Page tạm lỗi
                     </button>
+                  )}
+                  {failedPages.length > 0 && retryableFailedPages.length === 0 && (
+                    <span className="max-w-[260px] text-[11px] font-semibold leading-relaxed text-amber-700 dark:text-amber-300">
+                      Lỗi quyền/nội dung không nên bấm lại liên tục; sửa theo chi tiết phía trên trước.
+                    </span>
                   )}
                 </div>
               )}

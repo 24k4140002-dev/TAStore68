@@ -1,12 +1,16 @@
 // TAStore68 Pro — Service Worker for Web Push & Lock Screen Notifications
-const CACHE_NAME = 'tastore68-v1';
+const CACHE_NAME = 'tastore68-v6';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))))
+      .then(() => self.clients.claim())
+  );
 });
 
 // Handle Incoming Web Push Notifications (From Apple APNs / FCM)
@@ -26,18 +30,32 @@ self.addEventListener('push', (event) => {
   }
 
   const title = payload.title || 'TAStore68 — Tin nhắn mới';
+  const notificationData = payload.data || {};
+  const pageId = notificationData.pageId || 'all';
+  const conversationKey = notificationData.convId || notificationData.senderPsid || 'new';
   const options = {
     body: payload.body || 'Khách hàng vừa gửi tin nhắn',
-    icon: payload.icon || "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='25' fill='%232563eb'/><text x='50%' y='65%' font-size='50' font-weight='900' fill='white' text-anchor='middle' font-family='sans-serif'>TA</text></svg>",
-    badge: payload.badge || "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%232563eb'/></svg>",
-    data: payload.data || {},
+    icon: payload.icon || '/icon.svg',
+    badge: payload.badge || '/badge.svg',
+    data: notificationData,
     vibrate: [200, 100, 200],
-    tag: payload.data?.convId ? `chat-${payload.data.convId}` : 'chat-general',
+    // Keep one visible notification per customer conversation. A newer message
+    // replaces the previous card but renotify still asks the OS to alert again.
+    tag: notificationData.kind === 'setup'
+      ? 'metapost-push-ready'
+      : `chat-${pageId}-${conversationKey}`,
     renotify: true,
-    requireInteraction: false
+    requireInteraction: false,
+    silent: false
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(self.registration.showNotification(title, options).then(() => (
+    notificationData.kind === 'setup'
+      ? Promise.resolve()
+      : self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
+          clientList.forEach(client => client.postMessage({ type: 'PUSH_DELIVERED', pageId }));
+        })
+  )));
 });
 
 // Handle Notification Click (Deep-Linking directly to Customer Chat & Page)
@@ -46,7 +64,8 @@ self.addEventListener('notificationclick', (event) => {
   const data = event.notification.data || {};
   const pageId = data.pageId || 'all';
   const convId = data.convId || '';
-  const targetUrl = `/?pageId=${encodeURIComponent(pageId)}&convId=${encodeURIComponent(convId)}`;
+  const senderPsid = data.senderPsid || '';
+  const targetUrl = `/?pageId=${encodeURIComponent(pageId)}&convId=${encodeURIComponent(convId)}&senderPsid=${encodeURIComponent(senderPsid)}`;
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
@@ -56,7 +75,8 @@ self.addEventListener('notificationclick', (event) => {
           client.postMessage({
             type: 'NAVIGATE_TO_CONVERSATION',
             pageId,
-            convId
+            convId,
+            senderPsid
           });
           return client.focus();
         }

@@ -1,7 +1,62 @@
 // TAStore68 Pro — Notification Service with Web Audio API + HTML5 Audio Fallback & Web Push
+import { shouldRefreshPushRegistration, shouldUseServerPush } from './pushState.js';
 
 let audioCtx = null;
 let isAudioUnlocked = false;
+let serviceWorkerMessageListenerInstalled = false;
+let serviceWorkerNavigateCallback = null;
+const deliveredMessageKeys = new Map();
+const MESSAGE_DEDUPE_WINDOW_MS = 10 * 60_000;
+
+export function createNotificationEventKey(pageId, convId, messageId) {
+  if (!messageId) return '';
+  return `${pageId || 'all'}:${convId || 'unknown'}:${messageId}`;
+}
+
+function claimStoredNotificationEvent(key, now) {
+  try {
+    const storageKey = 'metapost_notification_dedupe';
+    const stored = JSON.parse(localStorage.getItem(storageKey) || '{}');
+    const freshEntries = Object.entries(stored)
+      .filter(([, storedAt]) => now - Number(storedAt) <= MESSAGE_DEDUPE_WINDOW_MS)
+      .slice(-200);
+    const freshMap = Object.fromEntries(freshEntries);
+    if (freshMap[key]) return false;
+    freshMap[key] = now;
+    localStorage.setItem(storageKey, JSON.stringify(freshMap));
+  } catch {
+    // In private/restricted storage mode, the in-memory map still prevents
+    // duplicates within the current tab.
+  }
+  return true;
+}
+
+async function claimNotificationEvent(pageId, convId, messageId) {
+  const key = createNotificationEventKey(pageId, convId, messageId);
+  if (!key) return true;
+
+  const now = Date.now();
+  for (const [storedKey, storedAt] of deliveredMessageKeys) {
+    if (now - storedAt > MESSAGE_DEDUPE_WINDOW_MS) deliveredMessageKeys.delete(storedKey);
+  }
+  if (deliveredMessageKeys.has(key)) return false;
+
+  const claimAcrossTabs = () => claimStoredNotificationEvent(key, now);
+  const claimed = typeof navigator !== 'undefined' && navigator.locks?.request
+    ? await navigator.locks.request(
+        'metapost-notification-claim',
+        { mode: 'exclusive' },
+        claimAcrossTabs
+      )
+    : claimAcrossTabs();
+  if (!claimed) return false;
+
+  deliveredMessageKeys.set(key, now);
+  if (deliveredMessageKeys.size > 500) {
+    deliveredMessageKeys.delete(deliveredMessageKeys.keys().next().value);
+  }
+  return true;
+}
 
 // Generate 0.5s crystal dual-tone "Ting Ting" Bell chime (WAV PCM Base64 Data URI)
 function generateChimeDataUri() {
@@ -90,14 +145,25 @@ function getOrCreateAudioElement() {
 
 // Audio Unlocker for iOS Safari & Android
 export function unlockAudio() {
+  if (isAudioUnlocked) return;
+  // Chrome and iOS only allow AudioContext startup during an active user
+  // gesture. Ignore programmatic calls instead of producing autoplay warnings.
+  if (typeof navigator !== 'undefined' && navigator.userActivation && !navigator.userActivation.isActive) {
+    return;
+  }
   try {
     const el = getOrCreateAudioElement();
     if (el) {
+      const wasMuted = el.muted;
+      el.muted = true;
       el.play().then(() => {
         el.pause();
         el.currentTime = 0;
+        el.muted = wasMuted;
         isAudioUnlocked = true;
-      }).catch(() => {});
+      }).catch(() => {
+        el.muted = wasMuted;
+      });
     }
 
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -120,10 +186,11 @@ export function unlockAudio() {
   }
 }
 
-// Auto-unlock on first user tap anywhere on the screen
+// Auto-unlock silently on the first real user gesture. The chime itself must
+// only be audible when a newly arrived message is detected.
 if (typeof window !== 'undefined') {
-  ['click', 'touchstart', 'touchend', 'pointerdown', 'keydown'].forEach(evt => {
-    window.addEventListener(evt, unlockAudio, { once: false, passive: true });
+  ['pointerdown', 'keydown'].forEach(evt => {
+    window.addEventListener(evt, unlockAudio, { once: true, passive: true });
   });
 }
 
@@ -200,17 +267,34 @@ export async function registerServiceWorker(onNavigateCallback = null) {
   }
 
   try {
-    const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    if (typeof onNavigateCallback === 'function') {
+      serviceWorkerNavigateCallback = onNavigateCallback;
+    }
+
+    const reg = await navigator.serviceWorker.register('/sw.js?v=6', {
+      scope: '/',
+      updateViaCache: 'none'
+    });
+    reg.update().catch(() => {});
 
     // Listen for messages from SW when user clicks notification
-    navigator.serviceWorker.addEventListener('message', (event) => {
-      if (event.data?.type === 'NAVIGATE_TO_CONVERSATION') {
-        const { pageId, convId } = event.data;
-        if (onNavigateCallback) {
-          onNavigateCallback(pageId, convId);
+    if (!serviceWorkerMessageListenerInstalled) {
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data?.type === 'PUSH_DELIVERED') {
+          const receivedPages = JSON.parse(localStorage.getItem('metapost_push_received_pages') || '{}');
+          receivedPages[event.data.pageId] = Date.now();
+          localStorage.setItem('metapost_push_received_pages', JSON.stringify(receivedPages));
+          window.dispatchEvent(new CustomEvent('metapost-push-webhook-ready'));
         }
-      }
-    });
+        if (event.data?.type === 'NAVIGATE_TO_CONVERSATION') {
+          const { pageId, convId, senderPsid } = event.data;
+          if (serviceWorkerNavigateCallback) {
+            serviceWorkerNavigateCallback(pageId, convId, senderPsid);
+          }
+        }
+      });
+      serviceWorkerMessageListenerInstalled = true;
+    }
 
     return reg;
   } catch (err) {
@@ -224,6 +308,62 @@ export async function registerServiceWorker(onNavigateCallback = null) {
  */
 export function isNotificationSupported() {
   return typeof window !== 'undefined' && 'Notification' in window;
+}
+
+export function isIosNotificationInstallRequired(
+  navigatorLike = typeof navigator !== 'undefined' ? navigator : null,
+  windowLike = typeof window !== 'undefined' ? window : null
+) {
+  const userAgent = String(navigatorLike?.userAgent || '');
+  const isIos = /iPad|iPhone|iPod/i.test(userAgent)
+    || (navigatorLike?.platform === 'MacIntel' && Number(navigatorLike?.maxTouchPoints || 0) > 1);
+  const isStandalone = Boolean(
+    navigatorLike?.standalone
+    || windowLike?.matchMedia?.('(display-mode: standalone)')?.matches
+  );
+  return isIos && !isStandalone;
+}
+
+export async function getBackgroundNotificationStatus() {
+  if (
+    !isNotificationSupported()
+    || Notification.permission !== 'granted'
+    || !('serviceWorker' in navigator)
+    || !('PushManager' in window)
+  ) return false;
+
+  try {
+    const registration = await navigator.serviceWorker.getRegistration('/');
+    if (!registration?.pushManager) return false;
+    return Boolean(await registration.pushManager.getSubscription());
+  } catch {
+    return false;
+  }
+}
+
+export async function disableBackgroundNotifications() {
+  try {
+    if ('serviceWorker' in navigator) {
+      const registration = await navigator.serviceWorker.getRegistration('/');
+      const subscription = await registration?.pushManager?.getSubscription();
+      if (subscription) {
+        await fetch('/api/push/unsubscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint: subscription.endpoint }),
+          keepalive: true
+        }).catch(() => null);
+        await subscription.unsubscribe().catch(() => false);
+      }
+    }
+  } finally {
+    localStorage.removeItem('metapost_push_enabled');
+    localStorage.removeItem('metapost_push_page_count');
+    localStorage.removeItem('metapost_push_webhook_ready');
+    localStorage.removeItem('metapost_push_received_pages');
+    localStorage.removeItem('metapost_push_registered_at');
+    localStorage.removeItem('metapost_push_selection_signature');
+  }
 }
 
 /**
@@ -241,6 +381,143 @@ export async function requestNotificationPermission() {
   }
 }
 
+export function urlBase64ToUint8Array(value) {
+  const padding = '='.repeat((4 - (value.length % 4)) % 4);
+  const base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map(character => character.charCodeAt(0)));
+}
+
+/**
+ * Register this device with the server. The Facebook token is only used by the
+ * server to verify the Pages currently managed by the user and is never saved.
+ */
+export async function enableBackgroundNotifications(fbToken, { sendTest = true } = {}) {
+  if (!fbToken) throw new Error('Bạn cần kết nối Facebook trước khi bật thông báo.');
+  if (!isNotificationSupported() || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+    if (isIosNotificationInstallRequired()) {
+      throw new Error('Trên iPhone/iPad: mở bằng Safari, chọn Chia sẻ → Thêm vào Màn hình chính, rồi mở shortcut để bật chuông.');
+    }
+    throw new Error('Thiết bị hoặc trình duyệt này chưa hỗ trợ thông báo nền. Hãy dùng Chrome/Edge mới hoặc shortcut Màn hình chính trên iPhone.');
+  }
+
+  const permission = Notification.permission === 'granted'
+    ? 'granted'
+    : await requestNotificationPermission();
+  if (permission !== 'granted') {
+    throw new Error(permission === 'denied'
+      ? 'Quyền thông báo đang bị chặn trong cài đặt trình duyệt.'
+      : 'Bạn chưa cho phép thông báo.');
+  }
+
+  const registration = await registerServiceWorker();
+  if (!registration) throw new Error('Không thể khởi động dịch vụ thông báo.');
+
+  let subscription = await registration.pushManager.getSubscription();
+  const selectedPages = getSelectedPushPages();
+  const selectionSignature = getPushSelectionSignature(selectedPages);
+  const refreshRegistration = shouldRefreshPushRegistration({
+    enabled: localStorage.getItem('metapost_push_enabled') === 'true',
+    permission,
+    hasSubscription: Boolean(subscription),
+    lastRegisteredAt: localStorage.getItem('metapost_push_registered_at'),
+    storedSelectionSignature: localStorage.getItem('metapost_push_selection_signature'),
+    currentSelectionSignature: selectionSignature
+  });
+  if (!sendTest && !refreshRegistration) {
+    return {
+      permission,
+      pageCount: Number(localStorage.getItem('metapost_push_page_count') || 0),
+      testSent: false,
+      webhookAttempted: 0,
+      webhookLinkedCount: Number(localStorage.getItem('metapost_push_webhook_linked_count') || 0),
+      webhookFailures: [],
+      webhookObserved: false,
+      lastWebhookAt: null,
+      diagnostics: null,
+      registrationReused: true
+    };
+  }
+
+  const configResponse = await fetch('/api/push/config', { cache: 'no-store' });
+  const config = await configResponse.json().catch(() => ({}));
+  if (!configResponse.ok || !config.publicKey) {
+    throw new Error(config.error || 'Máy chủ thông báo chưa sẵn sàng.');
+  }
+
+  if (!subscription) {
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(config.publicKey)
+    });
+  }
+
+  const response = await fetch('/api/push/subscribe', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${fbToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      subscription: subscription.toJSON(),
+      sendTest: Boolean(sendTest),
+      ensureWebhook: Boolean(sendTest),
+      ...selectedPages
+    })
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || 'Không thể đăng ký thông báo nền.');
+
+  localStorage.setItem('metapost_push_enabled', 'true');
+  localStorage.setItem('metapost_push_page_count', String(result.pageCount || 0));
+  localStorage.setItem('metapost_push_registered_at', String(Date.now()));
+  localStorage.setItem('metapost_push_selection_signature', selectionSignature);
+  let diagnostics = null;
+  if (sendTest) {
+    try {
+      const statusResponse = await fetch('/api/push/status', {
+        method: 'POST', headers: { Authorization: `Bearer ${fbToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(getSelectedPushPages()), signal: AbortSignal.timeout(20_000)
+      });
+      if (statusResponse.ok) diagnostics = await statusResponse.json();
+    } catch { /* Device registration remains valid; report diagnostics as unknown. */ }
+  }
+  return {
+    permission,
+    pageCount: result.pageCount || 0,
+    testSent: Boolean(result.testSent),
+    webhookAttempted: Number(result.webhookAttempted || 0),
+    webhookLinkedCount: Number(result.webhookLinkedCount || 0),
+    webhookFailures: Array.isArray(result.webhookFailures) ? result.webhookFailures : [],
+    appWebhookReady: result.appWebhookReady !== false,
+    appWebhookUpdated: Boolean(result.appWebhookUpdated),
+    appWebhookError: result.appWebhookError || null,
+    webhookObserved: Boolean(result.webhookObserved),
+    lastWebhookAt: result.lastWebhookAt || null,
+    diagnostics
+  };
+}
+
+function getSelectedPushPages() {
+  try {
+    const pageIds = JSON.parse(localStorage.getItem('metapost_visible_page_ids') || '[]');
+    return Array.isArray(pageIds) && pageIds.length ? { pageIds } : {};
+  } catch { return {}; }
+}
+
+function getPushSelectionSignature(selectedPages = getSelectedPushPages()) {
+  if (Array.isArray(selectedPages.pageIds) && selectedPages.pageIds.length > 0) {
+    return `selected:${[...selectedPages.pageIds].map(String).sort().join(',')}`;
+  }
+  try {
+    const pages = JSON.parse(localStorage.getItem('metapost_pages_cache') || '[]');
+    const ids = Array.isArray(pages) ? pages.map(page => String(page?.id || '')).filter(Boolean).sort() : [];
+    return `all:${ids.join(',')}`;
+  } catch {
+    return 'all:';
+  }
+}
+
 /**
  * Dispatch Lock Screen or In-App Notification with Sound
  */
@@ -251,8 +528,26 @@ export async function triggerNewMessageNotification({
   customerName = 'Khách hàng',
   messageText = 'Tin nhắn mới',
   avatarUrl = null,
-  playSound = true
+  messageId = '',
+  playSound = true,
+  forceLocal = false
 }) {
+  if (!(await claimNotificationEvent(pageId, convId, messageId))) {
+    return { delivered: false, reason: 'duplicate' };
+  }
+
+  // Once server Web Push is enabled, Meta's webhook owns both the OS alert and
+  // its sound. Polling remains for UI freshness but must not create a second ding.
+  let receivedPages = {};
+  try { receivedPages = JSON.parse(localStorage.getItem('metapost_push_received_pages') || '{}'); } catch {}
+  if (!forceLocal && shouldUseServerPush({
+    enabled: localStorage.getItem('metapost_push_enabled') === 'true',
+    permission: typeof Notification === 'undefined' ? 'default' : Notification.permission,
+    pageId, receivedPages
+  })) {
+    return { delivered: false, reason: 'server-push-enabled' };
+  }
+
   // 1. Play "Ting Ting" Chime
   if (playSound) {
     playNotificationChime();
@@ -262,20 +557,21 @@ export async function triggerNewMessageNotification({
   if (isNotificationSupported()) {
     try {
       if (Notification.permission === 'granted') {
-        const title = `${customerName} • ${pageName}`;
+        const title = `${pageName} • ${customerName}`;
         const body = messageText || 'Khách hàng vừa gửi tin nhắn mới';
-        const tag = convId ? `chat-${convId}` : 'chat-general';
+        const tag = convId ? `chat-${pageId}-${convId}` : `chat-${pageId}`;
 
         if ('serviceWorker' in navigator) {
           const reg = await navigator.serviceWorker.ready;
           if (reg && reg.showNotification) {
             await reg.showNotification(title, {
               body,
-              icon: avatarUrl || "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='25' fill='%232563eb'/><text x='50%' y='65%' font-size='50' font-weight='900' fill='white' text-anchor='middle' font-family='sans-serif'>TA</text></svg>",
-              badge: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%232563eb'/></svg>",
-              data: { pageId, convId, customerName },
+              icon: avatarUrl || '/icon.svg',
+              badge: '/badge.svg',
+              data: { pageId, pageName, convId, customerName, messageId },
               tag,
               renotify: true,
+              silent: false,
               vibrate: [200, 100, 200]
             });
             return;
@@ -283,10 +579,11 @@ export async function triggerNewMessageNotification({
         }
 
         // Fallback
-        new Notification(title, { body, tag });
+        new Notification(title, { body, tag, silent: false, data: { pageId, pageName, convId, messageId } });
       }
     } catch (e) {
       console.warn('Trigger notification error:', e);
     }
   }
+  return { delivered: true };
 }

@@ -1,3 +1,5 @@
+import { fromMetaBudget, toMetaBudget } from '../utils/adsMoney.js';
+
 const configuredGraphVersion = import.meta.env?.VITE_META_GRAPH_VERSION || 'v26.0';
 export const META_GRAPH_VERSION = /^v\d+\.\d+$/.test(configuredGraphVersion)
   ? configuredGraphVersion
@@ -23,6 +25,8 @@ export async function compressImage(file, maxDimension = 1920, quality = 0.82) {
     const img = new Image();
     const reader = new FileReader();
 
+    const keepOriginal = () => resolve(file);
+
     reader.onload = (e) => {
       img.onload = () => {
         let { width, height } = img;
@@ -40,13 +44,18 @@ export async function compressImage(file, maxDimension = 1920, quality = 0.82) {
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
+        const outputType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+        if (outputType === 'image/jpeg') {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, width, height);
+        }
         ctx.drawImage(img, 0, 0, width, height);
 
         canvas.toBlob(
           (blob) => {
             if (blob && blob.size < file.size) {
               const compressed = new File([blob], file.name, {
-                type: 'image/jpeg',
+                type: outputType,
                 lastModified: Date.now()
               });
               resolve(compressed);
@@ -54,32 +63,48 @@ export async function compressImage(file, maxDimension = 1920, quality = 0.82) {
               resolve(file);
             }
           },
-          'image/jpeg',
+          outputType,
           quality
         );
       };
+      img.onerror = keepOriginal;
       img.src = e.target.result;
     };
+    reader.onerror = keepOriginal;
     reader.readAsDataURL(file);
   });
 }
 
-// Generate unique zero-width characters and random tag to prevent duplicate content flags
-export function generateSmartAntiSpam(text, pageIndex = 0, totalPages = 1) {
-  if (!text || totalPages <= 1) return text;
-  const zeroWidthSpaces = ['\u200B', '\u200C', '\u200D', '\uFEFF'];
-  const zws = Array.from({ length: (pageIndex % 5) + 1 }, () =>
-    zeroWidthSpaces[Math.floor(Math.random() * zeroWidthSpaces.length)]
-  ).join('');
-  const randomTag = Math.random().toString(36).substring(2, 6).toUpperCase();
-  return `${text}${zws}\n\n🏷️ [#${randomTag}]`;
+// Kept for backward compatibility. Meta does not document invisible text
+// mutations as an anti-spam technique, so always preserve the user's content.
+export function generateSmartAntiSpam(text) {
+  return text;
 }
 
 export async function safeFetch(url, options = {}, timeoutMs = 20000) {
   const controller = new AbortController();
   const tid = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal });
+    const requestUrl = new URL(String(url), typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
+    const headers = new Headers(options.headers || {});
+    let accessToken = requestUrl.searchParams.get('access_token') || '';
+    if (accessToken) requestUrl.searchParams.delete('access_token');
+
+    const body = options.body;
+    if (!accessToken && typeof FormData !== 'undefined' && body instanceof FormData) {
+      accessToken = String(body.get('access_token') || '');
+      if (accessToken) body.delete('access_token');
+    }
+    if (!accessToken && typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+      accessToken = String(body.get('access_token') || '');
+      if (accessToken) body.delete('access_token');
+    }
+    if (accessToken && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${accessToken}`);
+    }
+
+    const fetchTarget = /^https?:/i.test(String(url)) ? requestUrl.toString() : `${requestUrl.pathname}${requestUrl.search}${requestUrl.hash}`;
+    const res = await fetch(fetchTarget, { ...options, headers, signal: controller.signal });
     let json;
     try {
       json = await res.json();
@@ -102,11 +127,18 @@ export async function safeFetch(url, options = {}, timeoutMs = 20000) {
       err.userTitle = facebookError.error_user_title;
       err.userMessage = facebookError.error_user_msg;
       err.httpStatus = res.status;
+      err.transient = code === 1 || code === 2 || code === 4 || code === 17 || code === 32 || code === 341 || code === 613 || res.status >= 500;
       throw err;
     }
     return json;
   } catch (e) {
-    if (e.name === 'AbortError') throw new Error('Kết nối Facebook quá chậm. Kiểm tra mạng.');
+    if (e.name === 'AbortError') {
+      const timeoutError = new Error('Kết nối Facebook quá chậm. Kiểm tra mạng.');
+      timeoutError.transient = true;
+      timeoutError.httpStatus = 0;
+      throw timeoutError;
+    }
+    if (e instanceof TypeError) e.transient = true;
     throw e;
   } finally {
     clearTimeout(tid);
@@ -114,12 +146,19 @@ export async function safeFetch(url, options = {}, timeoutMs = 20000) {
 }
 
 // Utility to run async tasks in throttled chunks to prevent Facebook rate limiting
-export async function runInChunks(items, fn, chunkSize = 3, delayMs = 120) {
+export async function runInChunks(items, fn, chunkSize = 3, delayMs = 120, onChunk = null) {
   const results = [];
   for (let i = 0; i < items.length; i += chunkSize) {
     const chunk = items.slice(i, i + chunkSize);
     const res = await Promise.allSettled(chunk.map(fn));
     results.push(...res);
+    if (typeof onChunk === 'function') {
+      await onChunk(res, {
+        startIndex: i,
+        processedCount: Math.min(i + chunk.length, items.length),
+        totalCount: items.length
+      });
+    }
     if (i + chunkSize < items.length && delayMs > 0) {
       await new Promise(r => setTimeout(r, delayMs));
     }
@@ -264,9 +303,11 @@ export async function enrichPagesWithLikes(pages, fbToken) {
     nameCounts[p.name] = (nameCounts[p.name] || 0) + 1;
   });
 
-  const duplicatePages = pages.filter(p =>
-    (nameCounts[p.name] > 1 || p.fan_count === undefined) && !likesCache[p.id]
-  );
+  const duplicatePages = pages.filter(p => (
+    nameCounts[p.name] > 1
+    && p.fan_count === undefined
+    && !likesCache[p.id]
+  ));
 
   if (duplicatePages.length > 0) {
     await runInChunks(duplicatePages, async (page) => {
@@ -305,7 +346,7 @@ export async function fetchPages(fbToken) {
   const cleanToken = (fbToken || '').trim();
   if (!cleanToken) return [];
   const res = await safeFetch(
-    `${API_BASE}/me/accounts?fields=id,name,category,access_token,picture{data{url}},tasks&limit=100&access_token=${encodeURIComponent(cleanToken)}`
+    `${API_BASE}/me/accounts?fields=id,name,category,access_token,picture{data{url}},tasks,fan_count,followers_count,username&limit=100&access_token=${encodeURIComponent(cleanToken)}`
   );
   const rawPages = res.data || [];
   if (rawPages.length === 0) return [];
@@ -316,24 +357,16 @@ export async function fetchPages(fbToken) {
 }
 
 // Fetch conversations for a specific page with participant avatars & snippet (supports pagination)
-export async function fetchPageConversations(pageId, pageName, pageToken, afterCursor = null) {
+export async function fetchPageConversations(pageId, pageName, pageToken, afterCursor = null, limit = 50) {
   if (!pageId || !pageToken) return [];
-  try {
-    let url = `${API_BASE}/${pageId}/conversations?fields=id,updated_time,unread_count,participants{id,name,picture{data{url}}},can_reply,messages.limit(1){id,message,created_time,from,attachments{mime_type,file_url,image_data}}&limit=50&access_token=${encodeURIComponent(pageToken)}`;
-    if (afterCursor) {
-      url += `&after=${encodeURIComponent(afterCursor)}`;
-    }
-    const res = await safeFetch(url);
+  const safeLimit = Math.min(50, Math.max(5, Number(limit) || 50));
+  let url = `${API_BASE}/${pageId}/conversations?fields=id,updated_time,unread_count,participants{id,name,picture{data{url}}},can_reply,messages.limit(1){id,message,created_time,from,attachments{mime_type,file_url,image_data}}&limit=${safeLimit}&access_token=${encodeURIComponent(pageToken)}`;
+  if (afterCursor) {
+    url += `&after=${encodeURIComponent(afterCursor)}`;
+  }
+  const res = await safeFetch(url);
 
-    if (!res.data) return [];
-
-    // Load local read map
-    let readMap = {};
-    try {
-      readMap = JSON.parse(localStorage.getItem('metapost_read_map') || '{}');
-    } catch {}
-
-    return res.data.map(conv => {
+  const conversations = (res.data || []).map(conv => {
       const participants = conv.participants?.data || [];
       const customer = participants.find(p => p.id !== pageId);
       const lastMsg = conv.messages?.data?.[0];
@@ -350,21 +383,6 @@ export async function fetchPageConversations(pageId, pageName, pageToken, afterC
         );
       } catch {}
 
-      // Unread logic:
-      // 1. If user previously viewed this conversation (in readMap), check if a NEW message arrived after read timestamp
-      // 2. Otherwise, trust Facebook Graph API's conv.unread_count
-      const readUntil = readMap[conv.id];
-      const msgTime = conv.updated_time || lastMsg?.created_time;
-      let effectiveUnread = conv.unread_count || 0;
-
-      if (readUntil && msgTime) {
-        if (new Date(msgTime).getTime() <= new Date(readUntil).getTime()) {
-          effectiveUnread = 0; // Already read
-        } else {
-          effectiveUnread = effectiveUnread > 0 ? effectiveUnread : 1; // New message after read
-        }
-      }
-
       return {
         id: conv.id,
         fb_conversation_id: conv.id,
@@ -379,9 +397,14 @@ export async function fetchPageConversations(pageId, pageName, pageToken, afterC
         last_message_at: conv.updated_time,
         can_reply: conv.can_reply !== false,
         last_sender_id: lastMsg?.from?.id,
+        last_message_id: lastMsg?.id || '',
         status: 'open',
         is_starred: false,
-        unread_count: effectiveUnread,
+        // Meta remains authoritative. A browser-local timestamp must never hide
+        // a thread that another operator/device marked unread, nor reopen a
+        // thread merely because the Page sent a newer reply.
+        unread_count: Number(conv.unread_count || 0),
+        meta_unread_count: Number(conv.unread_count || 0),
         labels: savedLabels || [],
         reply_deadline: lastMsg?.created_time
           ? new Date(new Date(lastMsg.created_time).getTime() + 24 * 3600 * 1000).toISOString()
@@ -389,24 +412,45 @@ export async function fetchPageConversations(pageId, pageName, pageToken, afterC
       };
     });
 
-    conversations.nextCursor = res.paging?.cursors?.after || null;
-    conversations.hasMore = !!(res.paging?.next || res.paging?.cursors?.after);
-    return conversations;
-  } catch (err) {
-    console.warn(`Fetch conversations failed for ${pageName}:`, err.message);
-    return [];
-  }
+  conversations.pageId = pageId;
+  conversations.nextCursor = res.paging?.cursors?.after || null;
+  conversations.hasMore = Boolean(res.paging?.next);
+  return conversations;
+}
+
+// Lightweight heads used only for cross-Page new-message notifications.
+// Keeping this separate avoids downloading 50 full conversation cards for
+// every Page on each background notification check.
+export async function fetchPageConversationHeads(pageId, pageName, pageToken, limit = 10) {
+  if (!pageId || !pageToken) return [];
+  const safeLimit = Math.min(20, Math.max(1, Number(limit) || 10));
+  const res = await safeFetch(
+    `${API_BASE}/${pageId}/conversations?fields=id,updated_time,participants{id,name,picture{data{url}}},messages.limit(1){id,message,created_time,from,attachments{mime_type}}&limit=${safeLimit}&access_token=${encodeURIComponent(pageToken)}`
+  );
+
+  const heads = (res.data || []).map(conversation => {
+    const participants = conversation.participants?.data || [];
+    const customer = participants.find(participant => participant.id !== pageId);
+    const lastMessage = conversation.messages?.data?.[0];
+    return {
+      page_id: pageId,
+      page_name: pageName,
+      conversation_id: conversation.id,
+      customer_name: customer?.name || 'Khách hàng',
+      avatar_url: customer?.picture?.data?.url || null,
+      message_id: lastMessage?.id || '',
+      message_text: lastMessage?.message || (lastMessage?.attachments ? '📷 [Hình ảnh/Tệp]' : 'Tin nhắn mới'),
+      message_created_at: lastMessage?.created_time || conversation.updated_time,
+      sender_id: lastMessage?.from?.id || ''
+    };
+  });
+  heads.pageId = pageId;
+  return heads;
 }
 
 // Quick scan: fetch unread summary across ALL pages (lightweight, only counts)
 export async function fetchAllPagesUnreadSummary(allPages, fbToken) {
   if (!allPages || allPages.length === 0) return { total: 0, perPage: [] };
-
-  // Load read tracking from localStorage
-  let readMap = {};
-  try {
-    readMap = JSON.parse(localStorage.getItem('metapost_read_map') || '{}');
-  } catch {}
 
   const results = await runInChunks(allPages, async (page) => {
     const token = page.access_token || fbToken;
@@ -417,16 +461,7 @@ export async function fetchAllPagesUnreadSummary(allPages, fbToken) {
       const convs = res.data || [];
       let unread = 0;
       convs.forEach(c => {
-        const readUntil = readMap[c.id];
-        let isConvUnread = (c.unread_count || 0) > 0;
-        if (readUntil && c.updated_time) {
-          if (new Date(c.updated_time).getTime() <= new Date(readUntil).getTime()) {
-            isConvUnread = false; // Already read
-          } else {
-            isConvUnread = true; // New message arrived
-          }
-        }
-        if (isConvUnread) unread++;
+        if (Number(c.unread_count || 0) > 0) unread++;
       });
       return {
         pageId: page.id,
@@ -436,7 +471,15 @@ export async function fetchAllPagesUnreadSummary(allPages, fbToken) {
         totalConversations: convs.length
       };
     } catch (e) {
-      return { pageId: page.id, pageName: page.name, pagePicture: null, unreadCount: 0, totalConversations: 0 };
+      return {
+        pageId: page.id,
+        pageName: page.name,
+        pagePicture: page.picture?.data?.url || null,
+        unreadCount: 0,
+        totalConversations: 0,
+        error: true,
+        errorMessage: e?.message || 'Không đọc được Page này'
+      };
     }
   }, 3, 100);
 
@@ -471,25 +514,74 @@ export async function fetchConversationMessages(conversationId, pageToken, curso
         }
       }
     });
-    msgs.hasMore = Boolean(res?.paging?.next || res?.paging?.cursors?.after);
+    msgs.hasMore = Boolean(res?.paging?.next);
     msgs.nextCursor = res?.paging?.cursors?.after || res?.paging?.next || null;
     return msgs;
   } catch (err) {
-    console.error('fetchConversationMessages error:', err);
-    return [];
+    throw err;
   }
 }
 
-// Mark conversation as read to sync with Meta Business Suite (Non-blocking)
-export async function markConversationAsRead(conversationId, pageToken) {
-  if (!conversationId || !pageToken) return;
-  try {
-    fetch(`${API_BASE}/${conversationId}?is_read=true&access_token=${encodeURIComponent(pageToken)}`, {
-      method: 'POST'
-    }).catch(() => {});
-  } catch {
-    // Non-blocking
+export async function fetchConversationReadState(conversationId, pageToken) {
+  if (!conversationId || !pageToken) return null;
+  const res = await safeFetch(
+    `${API_BASE}/${conversationId}?fields=id,updated_time,unread_count&access_token=${encodeURIComponent(pageToken)}`
+  );
+  return {
+    conversationId: String(res.id || conversationId),
+    unreadCount: Number(res.unread_count || 0),
+    updatedTime: res.updated_time || null
+  };
+}
+
+// Send the supported Messenger seen action, then read the conversation back.
+// A successful sender action alone is not treated as proof that Business Suite
+// changed its Inbox unread state.
+export async function markConversationAsRead(userPsid, pageToken, conversationId = '') {
+  if (!userPsid || !pageToken) return false;
+  const response = await safeFetch(`${API_BASE}/me/messages?access_token=${encodeURIComponent(pageToken)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      recipient: { id: userPsid },
+      sender_action: 'mark_seen'
+    })
+  });
+
+  if (!conversationId) {
+    return { sent: true, confirmed: false, response };
   }
+
+  let readState = null;
+  let readbackError = null;
+  const readbackDelays = [0, 300, 900, 1800];
+  for (const delayMs of readbackDelays) {
+    if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
+    try {
+      readState = await fetchConversationReadState(conversationId, pageToken);
+      if (readState?.unreadCount === 0) break;
+    } catch (error) {
+      readbackError = error;
+    }
+  }
+
+  return {
+    sent: true,
+    confirmed: readState?.unreadCount === 0,
+    unreadCount: readState?.unreadCount ?? null,
+    updatedTime: readState?.updatedTime || null,
+    readbackError: readbackError?.message || null,
+    response
+  };
+}
+
+export function canMarkConversationSeen(conversation, now = Date.now()) {
+  if (!conversation || Number(conversation.unread_count || 0) <= 0) return false;
+  if (!conversation.customer_psid || !conversation.last_sender_id || !conversation.page_id) return false;
+  if (String(conversation.last_sender_id) === String(conversation.page_id)) return false;
+  if (conversation.can_reply === false) return false;
+  const replyDeadline = Date.parse(conversation.reply_deadline || '');
+  return Number.isFinite(replyDeadline) && replyDeadline > Number(now);
 }
 
 const PAGE_INBOX_APP_ID = '263902037430900';
@@ -584,6 +676,20 @@ export async function fetchThreadOwner(psid, pageToken) {
   }
 }
 
+async function metaLabelsRequest(operation, payload, pageToken) {
+  const cleanToken = cleanFacebookToken(pageToken);
+  if (!cleanToken) throw new Error('Thiếu Page Token để đồng bộ nhãn Meta.');
+
+  return safeFetch('/api/meta/custom-labels', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify({ operation, ...payload, pageToken: cleanToken })
+  }, 20000);
+}
+
 // Take or request thread control from another chatbot / handover app (Facebook Handover Protocol).
 export async function takeThreadControl(psid, pageToken) {
   if (!psid || !pageToken) return null;
@@ -627,8 +733,16 @@ export async function takeThreadControl(psid, pageToken) {
 export async function sendMessengerMessage(psid, messageText, pageToken, file = null) {
   if (!psid || !pageToken) throw new Error('Thiếu thông tin người nhận hoặc token');
 
-  const doSend = async () => {
-    if (file) {
+  const sendText = async () => safeFetch(`${API_BASE}/me/messages?access_token=${encodeURIComponent(pageToken)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      recipient: { id: psid },
+      message: { text: messageText.trim() }
+    })
+  });
+
+  const sendFile = async () => {
       const formData = new FormData();
       formData.append('recipient', JSON.stringify({ id: psid }));
       formData.append('message', JSON.stringify({
@@ -643,35 +757,51 @@ export async function sendMessengerMessage(psid, messageText, pageToken, file = 
         method: 'POST',
         body: formData
       });
-    }
-
-    const payload = {
-      recipient: { id: psid },
-      message: { text: messageText }
-    };
-    return safeFetch(`${API_BASE}/me/messages?access_token=${encodeURIComponent(pageToken)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
   };
 
-  try {
-    return await doSend();
-  } catch (err) {
-    if (isThreadControlError(err)) {
+  const sendWithThreadControl = async (sendOperation) => {
+    try {
+      return await sendOperation();
+    } catch (err) {
+      if (!isThreadControlError(err)) throw formatMessengerSendError(err);
       const ownerBeforeTakeover = await fetchThreadOwner(psid, pageToken);
       try {
         const takeover = await takeThreadControl(psid, pageToken);
         await new Promise(r => setTimeout(r, takeover?.action === 'taken' ? 350 : 800));
-        return await doSend();
+        return await sendOperation();
       } catch (retryErr) {
         const ownerAfterTakeover = await fetchThreadOwner(psid, pageToken);
         throw formatMessengerSendError(retryErr, ownerAfterTakeover || ownerBeforeTakeover);
       }
     }
-    throw formatMessengerSendError(err);
+  };
+
+  const cleanText = messageText?.trim() || '';
+  if (!cleanText && !file) throw new Error('Tin nhắn trống');
+
+  let textResponse = null;
+  let fileResponse = null;
+
+  if (cleanText) {
+    textResponse = await sendWithThreadControl(sendText);
   }
+
+  if (file) {
+    try {
+      fileResponse = await sendWithThreadControl(sendFile);
+    } catch (error) {
+      if (textResponse) {
+        error.textSent = true;
+        error.textResponse = textResponse;
+        error.message = `Đã gửi nội dung chữ lên Meta nhưng ảnh/tệp chưa gửi được. ${error.message}`;
+      }
+      throw error;
+    }
+  }
+
+  return textResponse
+    ? { ...textResponse, attachment_message_id: fileResponse?.message_id || null }
+    : fileResponse;
 }
 
 // Send comment reply
@@ -690,6 +820,30 @@ export async function sendPrivateReply(commentId, messageText, pageToken) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message: messageText })
   });
+}
+
+// Automatically subscribe a Facebook Page to the App's Webhooks (1-Click Auto Webhook)
+export async function subscribePageWebhooks(pageId, pageToken) {
+  if (!pageId || !pageToken) return null;
+  try {
+    return await safeFetch(
+      `${API_BASE}/${pageId}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_reads,message_deliveries&access_token=${encodeURIComponent(pageToken)}`,
+      { method: 'POST' }
+    );
+  } catch (e) {
+    console.warn(`[AutoWebhook] Failed to subscribe page ${pageId}:`, e?.message);
+    return null;
+  }
+}
+
+// Automatically subscribe all active pages to Webhooks in the background
+export async function subscribeAllPagesWebhooks(pages = []) {
+  if (!Array.isArray(pages) || pages.length === 0) return;
+  return runInChunks(pages, async (page) => {
+    if (page?.id && page?.access_token) {
+      await subscribePageWebhooks(page.id, page.access_token);
+    }
+  }, 3, 200);
 }
 
 // ----------------------------------------------------
@@ -723,42 +877,36 @@ export function getColorForLabel(name = '') {
   return '#64748b'; // Slate
 }
 
-// Fetch custom labels from Facebook Page along with users that have them (silent fallback)
+// Fetch custom labels from a Facebook Page. User assignments are fetched by
+// PSID because the current Custom Labels API no longer exposes a users field
+// on the Page label list.
 export async function fetchPageLabelsWithUsers(pageId, pageToken) {
   if (!pageId || !pageToken) return { labels: [], userLabelsMap: {} };
-  try {
-    const res = await safeFetch(
-      `${API_BASE}/${pageId}/custom_labels?fields=id,name,page_label_name,users&limit=50&access_token=${encodeURIComponent(pageToken)}`
-    );
-    const labels = [];
-    const userLabelsMap = {};
+  const res = await metaLabelsRequest('list_page_labels', { pageId }, pageToken);
+  const labels = [];
 
     (res.data || []).forEach(l => {
-      const name = l.name || l.page_label_name || 'Nhãn';
+      const name = l.page_label_name || 'Nhãn';
       const labelObj = {
         id: l.id,
         name: name,
         emoji: getEmojiForLabel(name),
-        color: getColorForLabel(name)
+        color: getColorForLabel(name),
+        page_id: pageId,
+        source: 'meta'
       };
       labels.push(labelObj);
-
-      const users = l.users?.data || [];
-      users.forEach(u => {
-        if (!userLabelsMap[u.id]) userLabelsMap[u.id] = [];
-        userLabelsMap[u.id].push(labelObj);
-      });
     });
 
-    return { labels, userLabelsMap };
-  } catch {
-    return { labels: [], userLabelsMap: {} };
-  }
+  return { labels, userLabelsMap: {}, unsupported: Boolean(res.unsupported) };
 }
 
 // Fetch custom labels from Facebook Page
 export async function fetchPageLabels(pageId, pageToken) {
   const result = await fetchPageLabelsWithUsers(pageId, pageToken);
+  if (result.unsupported) {
+    Object.defineProperty(result.labels, 'unsupported', { value: true });
+  }
   return result.labels;
 }
 
@@ -766,10 +914,7 @@ export async function fetchPageLabels(pageId, pageToken) {
 export async function createPageLabel(pageId, pageToken, labelName) {
   if (!pageId || !pageToken || !labelName) return null;
   try {
-    const res = await safeFetch(
-      `${API_BASE}/${pageId}/custom_labels?name=${encodeURIComponent(labelName)}&access_token=${encodeURIComponent(pageToken)}`,
-      { method: 'POST' }
-    );
+    const res = await metaLabelsRequest('create_label', { pageId, labelName }, pageToken);
     return res;
   } catch (e) {
     console.warn('Create page label error:', e.message);
@@ -781,10 +926,7 @@ export async function createPageLabel(pageId, pageToken, labelName) {
 export async function assignLabelToUser(labelId, userPsid, pageToken) {
   if (!labelId || !userPsid || !pageToken) return false;
   try {
-    await safeFetch(
-      `${API_BASE}/${labelId}/users?user=${encodeURIComponent(userPsid)}&access_token=${encodeURIComponent(pageToken)}`,
-      { method: 'POST' }
-    );
+    await metaLabelsRequest('assign_label', { labelId, userPsid }, pageToken);
     return true;
   } catch (e) {
     console.warn('Assign label to user error:', e.message);
@@ -796,10 +938,7 @@ export async function assignLabelToUser(labelId, userPsid, pageToken) {
 export async function unassignLabelFromUser(labelId, userPsid, pageToken) {
   if (!labelId || !userPsid || !pageToken) return false;
   try {
-    await safeFetch(
-      `${API_BASE}/${labelId}/users?user=${encodeURIComponent(userPsid)}&access_token=${encodeURIComponent(pageToken)}`,
-      { method: 'DELETE' }
-    );
+    await metaLabelsRequest('unassign_label', { labelId, userPsid }, pageToken);
     return true;
   } catch (e) {
     console.warn('Unassign label from user error:', e.message);
@@ -811,10 +950,10 @@ export async function unassignLabelFromUser(labelId, userPsid, pageToken) {
 export async function syncAssignPageLabel(pageId, pageToken, label, userPsid) {
   if (!pageId || !pageToken || !label) return label;
   try {
-    let targetLabelId = label.id;
+    let targetLabelId = label.page_id && label.page_id !== pageId ? null : label.id;
 
     // If ID is not a real Facebook numeric ID (e.g. meta_ordered), look up or create on FB Page
-    if (!targetLabelId || targetLabelId.startsWith('meta_') || isNaN(Number(targetLabelId))) {
+    if (!targetLabelId || String(targetLabelId).startsWith('meta_') || isNaN(Number(targetLabelId))) {
       const existingLabels = await fetchPageLabels(pageId, pageToken);
       const match = existingLabels.find(l => l.name.toLowerCase().trim() === label.name.toLowerCase().trim());
       if (match) {
@@ -828,11 +967,18 @@ export async function syncAssignPageLabel(pageId, pageToken, label, userPsid) {
     }
 
     // Now assign the real Facebook label to user
-    if (targetLabelId && userPsid && !targetLabelId.startsWith('meta_')) {
-      await assignLabelToUser(targetLabelId, userPsid, pageToken);
+    let metaSynced = false;
+    if (targetLabelId && userPsid && !String(targetLabelId).startsWith('meta_')) {
+      metaSynced = await assignLabelToUser(targetLabelId, userPsid, pageToken);
     }
 
-    return { ...label, id: targetLabelId || label.id };
+    return {
+      ...label,
+      id: targetLabelId || label.id,
+      page_id: pageId,
+      source: metaSynced ? 'meta' : (label.source || 'local'),
+      metaSynced
+    };
   } catch (e) {
     console.warn('syncAssignPageLabel error:', e.message);
     return label;
@@ -841,23 +987,47 @@ export async function syncAssignPageLabel(pageId, pageToken, label, userPsid) {
 
 // Smart helper: Unassign label from customer (PSID) on Facebook Page
 export async function syncUnassignPageLabel(pageId, pageToken, labelIdOrName, userPsid) {
-  if (!pageId || !pageToken || !userPsid) return;
+  if (!pageId || !pageToken || !userPsid) return false;
   try {
     let targetLabelId = labelIdOrName;
     if (typeof labelIdOrName === 'string' && (labelIdOrName.startsWith('meta_') || isNaN(Number(labelIdOrName)))) {
       const existingLabels = await fetchPageLabels(pageId, pageToken);
       const match = existingLabels.find(l => l.id === labelIdOrName || l.name.toLowerCase().trim() === labelIdOrName.toLowerCase().trim());
       if (match) targetLabelId = match.id;
+      else return false;
     }
     if (targetLabelId && !String(targetLabelId).startsWith('meta_')) {
-      await unassignLabelFromUser(targetLabelId, userPsid, pageToken);
+      return await unassignLabelFromUser(targetLabelId, userPsid, pageToken);
     }
+    return false;
   } catch (e) {
     console.warn('syncUnassignPageLabel error:', e.message);
+    return false;
   }
 }
 
-// Post to a single Facebook Page (supports text, link, 1 photo, multi-photo album, video, scheduling, anti-spam)
+async function cleanupUnpublishedPhotos(photoIds, pageToken) {
+  if (photoIds.length === 0) return;
+  await runInChunks(photoIds, async photoId => {
+    const formData = new FormData();
+    formData.append('access_token', pageToken);
+    return safeFetch(`${API_BASE}/${photoId}`, { method: 'DELETE', body: formData });
+  }, 2, 150);
+}
+
+async function runPublishStage(stage, task, details = {}) {
+  try {
+    return await task();
+  } catch (error) {
+    if (error && typeof error === 'object') {
+      error.publishStage = stage;
+      Object.assign(error, details);
+    }
+    throw error;
+  }
+}
+
+// Post to a single Facebook Page (supports text, link, photo albums, video and scheduling)
 export async function publishToFacebookPage(page, {
   postType = 'photo',
   postText = '',
@@ -865,18 +1035,14 @@ export async function publishToFacebookPage(page, {
   mediaFiles = [],
   isScheduled = false,
   scheduleTimestamp = null,
-  smartAntiSpam = true,
-  pageIndex = 0,
-  totalPages = 1
+  onMediaProgress
 }) {
   const pageToken = page.access_token;
   if (!pageToken) {
     throw new Error('Thiếu Page Access Token (Quyền quản trị trang)');
   }
 
-  const finalMessage = smartAntiSpam
-    ? generateSmartAntiSpam(postText, pageIndex, totalPages)
-    : postText;
+  const finalMessage = postText;
 
   // 1. Text & Optional Link Post
   if (postType === 'text' || (postType === 'photo' && mediaFiles.length === 0)) {
@@ -894,7 +1060,7 @@ export async function publishToFacebookPage(page, {
       formData.append('scheduled_publish_time', scheduleTimestamp);
     }
 
-    return await safeFetch(url, { method: 'POST', body: formData });
+    return runPublishStage('feed', () => safeFetch(url, { method: 'POST', body: formData }));
   }
 
   // 2. Single Photo Post
@@ -910,37 +1076,56 @@ export async function publishToFacebookPage(page, {
       formData.append('scheduled_publish_time', scheduleTimestamp);
     }
 
-    return await safeFetch(url, { method: 'POST', body: formData });
+    return runPublishStage('single_photo', () => safeFetch(url, { method: 'POST', body: formData }));
   }
 
   // 3. Multi-Photo Post (Upload unreleased photos first, then attach to feed)
   if (postType === 'photo' && mediaFiles.length > 1) {
     const mediaFbidArray = [];
+    const uploadedPhotoIds = [];
+    let feedRequestStarted = false;
 
-    for (let p = 0; p < mediaFiles.length; p++) {
-      const uploadUrl = `${API_BASE}/${page.id}/photos`;
-      const photoForm = new FormData();
-      photoForm.append('source', mediaFiles[p]);
-      photoForm.append('published', 'false');
-      photoForm.append('access_token', pageToken);
+    try {
+      for (let p = 0; p < mediaFiles.length; p++) {
+        const uploadUrl = `${API_BASE}/${page.id}/photos`;
+        const photoForm = new FormData();
+        photoForm.append('source', mediaFiles[p]);
+        photoForm.append('published', 'false');
+        photoForm.append('access_token', pageToken);
 
-      const photoJson = await safeFetch(uploadUrl, { method: 'POST', body: photoForm });
-      mediaFbidArray.push({ media_fbid: photoJson.id });
+        const photoJson = await runPublishStage(
+          'photo_upload',
+          () => safeFetch(uploadUrl, { method: 'POST', body: photoForm }, 60000),
+          { mediaIndex: p + 1 }
+        );
+        uploadedPhotoIds.push(photoJson.id);
+        mediaFbidArray.push({ media_fbid: photoJson.id });
+        onMediaProgress?.(p + 1, mediaFiles.length);
+      }
+
+      // Create one feed post from the unpublished photos.
+      const feedUrl = `${API_BASE}/${page.id}/feed`;
+      const feedForm = new FormData();
+      feedForm.append('message', finalMessage);
+      feedForm.append('attached_media', JSON.stringify(mediaFbidArray));
+      feedForm.append('access_token', pageToken);
+
+      if (isScheduled && scheduleTimestamp) {
+        feedForm.append('published', 'false');
+        feedForm.append('scheduled_publish_time', scheduleTimestamp);
+      }
+
+      feedRequestStarted = true;
+      return await runPublishStage('album_feed', () => safeFetch(feedUrl, { method: 'POST', body: feedForm }, 60000));
+    } catch (error) {
+      // Delete only drafts created by this failed attempt. If the feed request
+      // timed out or failed server-side, its outcome is uncertain, so keep them.
+      const isConfirmedClientRejection = error.httpStatus >= 400 && error.httpStatus < 500;
+      if (!feedRequestStarted || isConfirmedClientRejection) {
+        await cleanupUnpublishedPhotos(uploadedPhotoIds, pageToken).catch(() => {});
+      }
+      throw error;
     }
-
-    // Create multi-photo feed post
-    const feedUrl = `${API_BASE}/${page.id}/feed`;
-    const feedForm = new FormData();
-    feedForm.append('message', finalMessage);
-    feedForm.append('attached_media', JSON.stringify(mediaFbidArray));
-    feedForm.append('access_token', pageToken);
-
-    if (isScheduled && scheduleTimestamp) {
-      feedForm.append('published', 'false');
-      feedForm.append('scheduled_publish_time', scheduleTimestamp);
-    }
-
-    return await safeFetch(feedUrl, { method: 'POST', body: feedForm });
   }
 
   // 4. Video Post
@@ -956,7 +1141,7 @@ export async function publishToFacebookPage(page, {
       formData.append('scheduled_publish_time', scheduleTimestamp);
     }
 
-    return await safeFetch(url, { method: 'POST', body: formData }, 120000); // 120s timeout for video
+    return runPublishStage('video_upload', () => safeFetch(url, { method: 'POST', body: formData }, 120000)); // 120s timeout for video
   }
 
   throw new Error('Loại bài đăng hoặc tệp đính kèm không hợp lệ.');
@@ -999,19 +1184,16 @@ export async function exchangePermanentToken(shortToken) {
 // Fetch assigned custom labels for a specific customer (PSID)
 export async function fetchUserLabels(userPsid, pageToken) {
   if (!userPsid || !pageToken) return [];
-  try {
-    const res = await safeFetch(
-      `${API_BASE}/${userPsid}/custom_labels?fields=id,name,page_label_name&access_token=${encodeURIComponent(pageToken)}`
-    );
-    return (res.data || []).map(l => ({
-      id: l.id,
-      name: l.name || l.page_label_name,
-      emoji: '🏷️',
-      color: '#3b82f6'
-    }));
-  } catch (e) {
-    return [];
-  }
+  const res = await metaLabelsRequest('list_user_labels', { userPsid }, pageToken);
+  const labels = (res.data || []).map(l => ({
+    id: l.id,
+    name: l.page_label_name,
+    emoji: getEmojiForLabel(l.page_label_name),
+    color: getColorForLabel(l.page_label_name),
+    source: 'meta'
+  }));
+  if (res.unsupported) Object.defineProperty(labels, 'unsupported', { value: true });
+  return labels;
 }
 
 // Hide a Facebook Comment (e.g. comment containing customer phone number)
@@ -1120,18 +1302,12 @@ export async function fetchAdAccounts(token) {
   const clean = cleanFacebookToken(token);
   if (!clean) return [];
   try {
-    const res = await fetch(
-      `${API_BASE}/me/adaccounts?fields=id,name,account_id,account_status,currency,amount_spent,balance,spend_cap&limit=50&access_token=${clean}`
+    const data = await safeFetch(
+      `${API_BASE}/me/adaccounts?fields=id,name,account_id,account_status,currency,min_daily_budget,amount_spent,balance,spend_cap&limit=50&access_token=${encodeURIComponent(clean)}`
     );
-    const data = await res.json();
-    if (data.error) {
-      console.warn('Fetch ad accounts error:', data.error);
-      return { error: data.error };
-    }
     return data.data || [];
   } catch (err) {
-    console.error('fetchAdAccounts network error:', err);
-    return { error: { message: err.message } };
+    return { error: { message: err.message, code: err.code, subcode: err.subcode } };
   }
 }
 
@@ -1179,11 +1355,9 @@ export async function fetchAdAccountInsights(adAccountId, token, datePreset = 't
   const clean = cleanFacebookToken(token);
   if (!clean || !adAccountId) return null;
   try {
-    const res = await fetch(
-      `${API_BASE}/${adAccountId}/insights?fields=spend,impressions,clicks,cpc,cpm,ctr,reach,actions,cost_per_action_type&date_preset=${datePreset}&access_token=${clean}`
+    const data = await safeFetch(
+      `${API_BASE}/${encodeURIComponent(adAccountId)}/insights?fields=spend,impressions,clicks,cpc,cpm,ctr,reach,actions,cost_per_action_type&date_preset=${encodeURIComponent(datePreset)}&access_token=${encodeURIComponent(clean)}`
     );
-    const data = await res.json();
-    if (data.error) return { error: data.error };
     
     const insight = data.data?.[0] || null;
     if (!insight) {
@@ -1219,24 +1393,21 @@ export async function fetchAdAccountInsights(adAccountId, token, datePreset = 't
       costPerMessage
     };
   } catch (err) {
-    console.error('fetchAdAccountInsights error:', err);
-    return { error: { message: err.message } };
+    return { error: { message: err.message, code: err.code, subcode: err.subcode } };
   }
 }
 
 /**
  * Fetch Campaigns with their Insights for specific date preset
  */
-export async function fetchCampaignsWithInsights(adAccountId, token, datePreset = 'today') {
+export async function fetchCampaignsWithInsights(adAccountId, token, datePreset = 'today', currency = 'USD') {
   const clean = cleanFacebookToken(token);
   if (!clean || !adAccountId) return [];
   try {
     const fields = `id,name,status,objective,daily_budget,lifetime_budget,start_time,stop_time,insights.date_preset(${datePreset}){spend,impressions,clicks,cpc,cpm,ctr,reach,actions,cost_per_action_type}`;
-    const res = await fetch(
-      `${API_BASE}/${adAccountId}/campaigns?fields=${fields}&limit=50&access_token=${clean}`
+    const data = await safeFetch(
+      `${API_BASE}/${encodeURIComponent(adAccountId)}/campaigns?fields=${encodeURIComponent(fields)}&limit=50&access_token=${encodeURIComponent(clean)}`
     );
-    const data = await res.json();
-    if (data.error) return { error: data.error };
 
     const rawList = data.data || [];
     return rawList.map(camp => {
@@ -1253,8 +1424,8 @@ export async function fetchCampaignsWithInsights(adAccountId, token, datePreset 
         name: camp.name,
         status: camp.status, // 'ACTIVE' | 'PAUSED' | 'ARCHIVED'
         objective: camp.objective,
-        daily_budget: camp.daily_budget ? parseInt(camp.daily_budget, 10) / 100 : null, // FB returns in cents / hundredths
-        lifetime_budget: camp.lifetime_budget ? parseInt(camp.lifetime_budget, 10) / 100 : null,
+        daily_budget: fromMetaBudget(camp.daily_budget, currency),
+        lifetime_budget: fromMetaBudget(camp.lifetime_budget, currency),
         spend,
         impressions: insight ? parseInt(insight.impressions || 0, 10) : 0,
         clicks: insight ? parseInt(insight.clicks || 0, 10) : 0,
@@ -1267,8 +1438,7 @@ export async function fetchCampaignsWithInsights(adAccountId, token, datePreset 
       };
     });
   } catch (err) {
-    console.error('fetchCampaignsWithInsights error:', err);
-    return { error: { message: err.message } };
+    return { error: { message: err.message, code: err.code, subcode: err.subcode } };
   }
 }
 
@@ -1283,32 +1453,27 @@ export async function toggleCampaignStatus(campaignId, newStatus, token) {
   formData.append('status', newStatus);
   formData.append('access_token', clean);
 
-  const res = await fetch(`${API_BASE}/${campaignId}`, {
+  if (!['ACTIVE', 'PAUSED'].includes(newStatus)) throw new Error('Trạng thái chiến dịch không hợp lệ');
+  return safeFetch(`${API_BASE}/${campaignId}`, {
     method: 'POST',
     body: formData
   });
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message || 'Lỗi cập nhật chiến dịch');
-  return data;
 }
 
 /**
  * Update Campaign Daily Budget
  */
-export async function updateCampaignBudget(campaignId, dailyBudgetVnd, token) {
+export async function updateCampaignBudget(campaignId, dailyBudget, token, currency = 'USD') {
   const clean = cleanFacebookToken(token);
   if (!clean || !campaignId) throw new Error('Missing token or campaign ID');
 
   const formData = new URLSearchParams();
-  // Facebook API expects budget in cents / smallest currency unit (for VND, 1 VND = 100 hundredths)
-  formData.append('daily_budget', Math.round(dailyBudgetVnd * 100));
-  const res = await fetch(`${API_BASE}/${campaignId}`, {
+  formData.append('daily_budget', String(toMetaBudget(dailyBudget, currency)));
+  formData.append('access_token', clean);
+  return safeFetch(`${API_BASE}/${campaignId}`, {
     method: 'POST',
     body: formData
   });
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message || 'Lỗi cập nhật ngân sách');
-  return data;
 }
 
 /**
@@ -1318,11 +1483,9 @@ export async function fetchDailyAccountInsights(adAccountId, token, datePreset =
   const clean = cleanFacebookToken(token);
   if (!clean || !adAccountId) return [];
   try {
-    const res = await fetch(
-      `${API_BASE}/${adAccountId}/insights?fields=spend,impressions,clicks,cpc,cpm,ctr,actions,cost_per_action_type&time_increment=1&date_preset=${datePreset}&access_token=${clean}`
+    const data = await safeFetch(
+      `${API_BASE}/${encodeURIComponent(adAccountId)}/insights?fields=spend,impressions,clicks,cpc,cpm,ctr,actions,cost_per_action_type&time_increment=1&date_preset=${encodeURIComponent(datePreset)}&access_token=${encodeURIComponent(clean)}`
     );
-    const data = await res.json();
-    if (data.error) return { error: data.error };
 
     const rawList = data.data || [];
     return rawList.map(item => {
@@ -1343,8 +1506,7 @@ export async function fetchDailyAccountInsights(adAccountId, token, datePreset =
       };
     });
   } catch (err) {
-    console.error('fetchDailyAccountInsights error:', err);
-    return { error: { message: err.message } };
+    return { error: { message: err.message, code: err.code, subcode: err.subcode } };
   }
 }
 
@@ -1356,11 +1518,9 @@ export async function fetchCampaignAds(campaignId, token, datePreset = 'today') 
   if (!clean || !campaignId) return [];
   try {
     const fields = `id,name,status,creative{id,title,body,image_url,thumbnail_url,effective_object_story_id},insights.date_preset(${datePreset}){spend,impressions,clicks,cpc,cpm,ctr,actions,cost_per_action_type}`;
-    const res = await fetch(
-      `${API_BASE}/${campaignId}/ads?fields=${fields}&limit=50&access_token=${clean}`
+    const data = await safeFetch(
+      `${API_BASE}/${encodeURIComponent(campaignId)}/ads?fields=${encodeURIComponent(fields)}&limit=50&access_token=${encodeURIComponent(clean)}`
     );
-    const data = await res.json();
-    if (data.error) return { error: data.error };
 
     const rawList = data.data || [];
     return rawList.map(ad => {
@@ -1391,8 +1551,7 @@ export async function fetchCampaignAds(campaignId, token, datePreset = 'today') 
       };
     });
   } catch (err) {
-    console.error('fetchCampaignAds error:', err);
-    return { error: { message: err.message } };
+    return { error: { message: err.message, code: err.code, subcode: err.subcode } };
   }
 }
 
