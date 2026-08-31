@@ -67,6 +67,8 @@ SUPABASE_SERVICE_ROLE_KEY=your_private_sb_secret_key
 WEB_PUSH_VAPID_PUBLIC_KEY=your_public_vapid_key
 WEB_PUSH_VAPID_PRIVATE_KEY=your_private_vapid_key
 WEB_PUSH_SUBJECT=mailto:admin@example.com
+# Tuỳ chọn: bổ sung host push endpoint ngoài danh sách mặc định (FCM/Mozilla/Apple/WNS)
+# WEB_PUSH_ALLOWED_ENDPOINT_HOSTS=
 ```
 
 ### 3. Khởi chạy máy chủ phát triển (Vite Dev Server):
@@ -112,20 +114,37 @@ Facebook user token chỉ được gửi một lần tới server để kiểm t
 
 ```
 ├── api/
-│   └── meta/
-│       └── exchange-token.js   # Serverless Token Exchange endpoint
+│   ├── _lib/
+│   │   └── push.js             # Shared Web Push + Supabase + Meta helpers
+│   ├── meta/
+│   │   ├── exchange-token.js   # Serverless Token Exchange endpoint
+│   │   └── custom-labels.js    # Facebook custom labels proxy endpoint
+│   ├── push/
+│   │   ├── config.js           # Public VAPID key & readiness endpoint
+│   │   ├── status.js           # Webhook/push diagnostics endpoint
+│   │   ├── subscribe.js        # Register device push subscription
+│   │   └── unsubscribe.js      # Remove device push subscription
+│   └── webhook.js              # Meta webhook receiver (signature-verified)
+├── public/
+│   └── sw.js                   # Service Worker (Web Push & deep-link)
 ├── src/
 │   ├── components/
-│   │   ├── common/             # TokenModal, ThemeToggle...
+│   │   ├── admin/              # AdminStudio, QuickRepliesAdmin
+│   │   ├── ads/                # AdsStudio (Ads Dashboard)
+│   │   ├── common/             # TokenModal, ErrorBoundary, CustomerAvatar...
 │   │   ├── inbox/              # CRMInbox, ChatThread, ConversationSidebar...
 │   │   └── post/               # PostStudio (Multi-media publishing engine)
-│   ├── services/
-│   │   └── facebookApi.js      # Centralized Facebook Graph API engine
+│   ├── services/               # facebookApi, messageCache, pushState...
+│   ├── utils/                  # postStudio, adsMoney, tokenSync...
 │   ├── App.jsx                 # Main application layout & router
 │   ├── main.jsx                # React root entry point
 │   └── index.css               # Tailwind & WebKit mobile touch styles
+├── supabase/
+│   └── migrations/             # Push notifications schema (RLS enabled)
+├── test/                       # node --test suites (108 tests)
+├── docs/                       # Audit notes
 ├── .env.example                # Clean environment variables template
-├── db-setup.sql                # SQL Schema with Row Level Security (RLS)
+├── db-setup.sql                # Legacy CRM SQL Schema (optional)
 ├── package.json                # Project manifest (ES Module)
 ├── vercel.json                 # Vercel security headers & routing
 └── vite.config.js              # Optimized Vite rollup bundle splitting
