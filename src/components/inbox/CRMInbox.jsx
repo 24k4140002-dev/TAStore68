@@ -1613,21 +1613,34 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
     const candidates = eligible.map(createReadCandidate);
 
     if (candidates.length === 0) {
-      setUnreadSummary(prev => prev ? {
-        ...prev,
-        readNotice: {
+      if (unreadSnapshot.length > 0) {
+        // Fallback: Clear read marker in app so user is not permanently stuck with an unread badge
+        const clearedConversations = conversationsRef.current.map(c => (
+          Number(c.unread_count || 0) > 0
+            ? { ...c, unread_count: 0, meta_unread_count: 0, read_sync_state: 'localOnly' }
+            : c
+        ));
+        conversationsRef.current = clearedConversations;
+        setConversations(clearedConversations);
+        setUnreadSummary(prev => prev ? {
+          ...prev,
+          total: 0,
+          perPage: (prev.perPage || []).map(p => ({ ...p, unreadCount: 0 })),
+          readNotice: {
+            tone: 'success',
+            text: `Đã đánh dấu đã đọc ${unreadSnapshot.length} tin trong app.`
+          }
+        } : prev);
+        setReadActionNotice({
+          tone: 'success',
+          text: `Đã đánh dấu đã đọc ${unreadSnapshot.length} tin trong app.`
+        });
+      } else {
+        setReadActionNotice({
           tone: 'warning',
-          text: unreadSnapshot.length > 0
-            ? 'Các tin đang tải chưa đủ điều kiện để Meta xác nhận đã đọc.'
-            : 'Không có tin chưa đọc trong danh sách đang tải.'
-        }
-      } : prev);
-      setReadActionNotice({
-        tone: 'warning',
-        text: unreadSnapshot.length > 0
-          ? `Meta chưa cho app đánh dấu ${unreadSnapshot.length} tin này là đã đọc (thường do tin đã quá thời hạn xử lý hoặc thiếu thông tin người gửi). Dấu mới vẫn được giữ nguyên.`
-          : 'Không có tin chưa đọc trong danh sách đang tải.'
-      });
+          text: 'Không có tin chưa đọc trong danh sách đang tải.'
+        });
+      }
       setIsMarkingRead(false);
       return;
     }

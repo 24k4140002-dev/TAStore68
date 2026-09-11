@@ -12,8 +12,10 @@ export default { async fetch(request) {
     let body;
     try { body = JSON.parse(raw || '{}'); } catch { return json({ error: 'Dữ liệu không hợp lệ' }, 400); }
     await verifyPushApp(token);
-    const pages = selectNotificationPages(await fetchManagedPages(token), body.pageIds);
-    if (!pages.length) return json({ error: 'Không có Page đã chọn được phép truy cập' }, 403);
+    const allPages = await fetchManagedPages(token);
+    if (!allPages.length) return json({ error: 'Không có Page được quản lý' }, 403);
+    const selected = selectNotificationPages(allPages, body.pageIds);
+    const pages = selected.length > 0 ? selected : allPages;
     return json(await getWebhookDiagnostics(pages, origin));
   } catch (error) {
     return json({ error: error.status ? error.message : 'Chưa đọc được tình trạng thông báo. Hãy thử lại.' }, error.status || 502);

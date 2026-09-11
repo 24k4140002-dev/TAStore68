@@ -81,7 +81,7 @@ export function generateSmartAntiSpam(text) {
   return text;
 }
 
-export async function safeFetch(url, options = {}, timeoutMs = 20000) {
+export async function safeFetch(url, options = {}, timeoutMs = 35000) {
   const controller = new AbortController();
   const tid = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -395,15 +395,21 @@ export async function fetchPageConversations(pageId, pageName, pageToken, afterC
   try {
     res = await safeFetch(url);
   } catch (error) {
-    // Only retry transient Meta read failures, never writes, auth failures or
-    // rate limits. Remove optional media/avatar expansion and reduce the batch.
-    if (![1, 2].includes(Number(error?.code))) throw error;
-    await new Promise(resolve => setTimeout(resolve, 1200));
+    // Retry transient Meta read failures (code 1, 2) or network timeouts on mobile.
+    // Never retry auth, permissions or rate-limit errors.
+    const isRateLimitOrAuth = [4, 17, 32, 190, 200, 613].includes(Number(error?.code));
+    const isTimeoutOrTransient = !isRateLimitOrAuth && (
+      [1, 2].includes(Number(error?.code))
+      || error?.name === 'AbortError'
+      || /quá chậm|timeout|network|failed to fetch/i.test(String(error?.message || ''))
+    );
+    if (!isTimeoutOrTransient) throw error;
+    await new Promise(resolve => setTimeout(resolve, 800));
     const fallback = new URL(url);
     fallback.searchParams.set('limit', String(Math.min(safeLimit, 10)));
     fallback.searchParams.set('fields', 'id,updated_time,unread_count,participants{id,name},can_reply,messages.limit(1){id,message,created_time,from}');
     try {
-      res = await safeFetch(fallback.toString());
+      res = await safeFetch(fallback.toString(), {}, 25000);
     } catch (retryError) {
       if ([1, 2].includes(Number(retryError?.code))) {
         retryError.message = `Meta tạm lỗi khi tải Page (${retryError.code}). Đã thử lại một lần; vui lòng chờ khoảng một phút rồi tải lại.`;
@@ -621,13 +627,9 @@ export async function markConversationAsRead(userPsid, pageToken, conversationId
   };
 }
 
-export function canMarkConversationSeen(conversation, now = Date.now()) {
+export function canMarkConversationSeen(conversation) {
   if (!conversation || Number(conversation.unread_count || 0) <= 0) return false;
-  if (!conversation.customer_psid || !conversation.last_sender_id || !conversation.page_id) return false;
-  if (String(conversation.last_sender_id) === String(conversation.page_id)) return false;
-  if (conversation.can_reply === false) return false;
-  const replyDeadline = Date.parse(conversation.reply_deadline || '');
-  return Number.isFinite(replyDeadline) && replyDeadline > Number(now);
+  return Boolean(conversation.customer_psid && conversation.page_id);
 }
 
 const PAGE_INBOX_APP_ID = '263902037430900';

@@ -119,20 +119,18 @@ test('chunked Page loading publishes progressive batches without changing order'
   ]);
 });
 
-test('Meta mark-seen is attempted only for a recent unread customer message', () => {
-  const now = Date.parse('2026-08-26T06:00:00.000Z');
+test('Meta mark-seen is attempted for unread conversation with customer PSID and page ID', () => {
   const conversation = {
     unread_count: 1,
     customer_psid: 'customer_1',
     last_sender_id: 'customer_1',
     page_id: 'page_1',
-    can_reply: true,
-    reply_deadline: '2026-08-26T07:00:00.000Z'
+    can_reply: true
   };
-  assert.equal(canMarkConversationSeen(conversation, now), true);
-  assert.equal(canMarkConversationSeen({ ...conversation, unread_count: 0 }, now), false);
-  assert.equal(canMarkConversationSeen({ ...conversation, last_sender_id: 'page_1' }, now), false);
-  assert.equal(canMarkConversationSeen({ ...conversation, reply_deadline: '2026-08-26T05:00:00.000Z' }, now), false);
+  assert.equal(canMarkConversationSeen(conversation), true);
+  assert.equal(canMarkConversationSeen({ ...conversation, unread_count: 0 }), false);
+  assert.equal(canMarkConversationSeen({ ...conversation, customer_psid: '' }), false);
+  assert.equal(canMarkConversationSeen({ ...conversation, page_id: '' }), false);
 });
 
 test('publishes a 50-photo album with progress and all attached media', async () => {

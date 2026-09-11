@@ -132,6 +132,23 @@ export async function fetchManagedPages(userToken) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload.error) {
+    // Fallback: If userToken is a Page Access Token, /me/accounts fails with error 100.
+    // Query /me directly to support single Page tokens!
+    if (Number(payload.error?.code) === 100) {
+      const meUrl = new URL(`https://graph.facebook.com/${version}/me`);
+      meUrl.searchParams.set('fields', 'id,name');
+      const meRes = await fetch(meUrl, {
+        headers: { Authorization: `Bearer ${userToken}` }
+      });
+      const mePayload = await meRes.json().catch(() => ({}));
+      if (meRes.ok && mePayload?.id) {
+        return [{
+          id: String(mePayload.id),
+          name: String(mePayload.name || 'Fanpage').slice(0, 120),
+          accessToken: typeof userToken === 'string' ? userToken : ''
+        }];
+      }
+    }
     const error = new Error(payload.error?.message || 'Facebook token không hợp lệ');
     error.status = response.status === 401 ? 401 : 403;
     throw error;

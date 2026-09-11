@@ -43,8 +43,10 @@ async function handleRequest(request) {
 
   try {
     await verifyPushApp(userToken);
-    const managedPages = selectNotificationPages(await fetchManagedPages(userToken), body.pageIds);
-    if (!managedPages.length) return json({ error: 'Tài khoản không có Page được quản lý' }, 403);
+    const allPages = await fetchManagedPages(userToken);
+    if (!allPages.length) return json({ error: 'Tài khoản không có Page được quản lý' }, 403);
+    const selected = selectNotificationPages(allPages, body.pageIds);
+    const managedPages = selected.length > 0 ? selected : allPages;
     await savePushSubscription(body.subscription, managedPages);
     const appWebhookSetup = body.ensureWebhook === true
       ? await ensureAppWebhookSubscription(new URL(request.url).origin)
