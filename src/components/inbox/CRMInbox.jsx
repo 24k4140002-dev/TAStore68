@@ -41,13 +41,13 @@ import {
   fetchUserLabels,
   syncAssignPageLabel,
   syncUnassignPageLabel,
-  subscribeAllPagesWebhooks,
   runInChunks,
   DEFAULT_QUICK_REPLIES
 } from '../../services/facebookApi';
 import { runWithCrossTabSyncLock } from '../../utils/crossTabSync';
 import { mergeRefreshedPageConversations } from '../../services/conversationRefresh';
 import { PUSH_PAGE_SELECTION_CHANGED_EVENT } from '../../services/pushState';
+import { INBOX_PUSH_EVENT, createSyncQueue, matchesActiveThread } from '../../services/inboxSync';
 import {
   applyConfirmedReadsToConversations,
   applyConfirmedReadsToSummary,
@@ -82,9 +82,9 @@ const STATUS_MAP_KEY = 'metapost_status_map';
 const STARRED_MAP_KEY = 'metapost_starred_map';
 const INITIAL_MESSAGE_LIMIT = 30;
 const ACTIVE_THREAD_SYNC_LIMIT = 10;
-const ACTIVE_THREAD_SYNC_MS = 10_000;
-const FOREGROUND_SELECTED_PAGE_SYNC_MS = 45_000;
-const FOREGROUND_ALL_PAGES_SYNC_MS = 180_000;
+const ACTIVE_THREAD_SYNC_MS = 5_000;
+const FOREGROUND_SELECTED_PAGE_SYNC_MS = 20_000;
+const FOREGROUND_ALL_PAGES_SYNC_MS = 60_000;
 const FOREGROUND_OTHER_PAGES_SYNC_MS = 60_000;
 const BACKGROUND_SYNC_MS = 300_000;
 const FOREGROUND_EVENT_COOLDOWN_MS = 15_000;
@@ -233,10 +233,14 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
   const [isVietQROpen, setIsVietQROpen] = useState(false);
   const [isPageManagerOpen, setIsPageManagerOpen] = useState(false);
   const notificationHeadsRef = useRef(new Map());
+  const notificationBootCompleteRef = useRef(false);
   const notificationMonitorRunningRef = useRef(false);
   const backgroundConversationSyncRunningRef = useRef(false);
+  const pageReadCooldownRef = useRef(new Map());
   const activeConversationRef = useRef(activeConversation);
   const conversationsRef = useRef(conversations);
+  const messagesRef = useRef(messages);
+  const initialMessageLoadRef = useRef(false);
   const messageRequestIdRef = useRef(0);
   const conversationListRequestIdRef = useRef(0);
   const didRestoreActiveConversationRef = useRef(false);
@@ -248,6 +252,7 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
   const lastNotificationMonitorAtRef = useRef(0);
   activeConversationRef.current = activeConversation;
   conversationsRef.current = conversations;
+  messagesRef.current = messages;
 
   const applyMetaLabelsToConversation = useCallback((conversation, fbLabels) => {
     if (!conversation?.fb_conversation_id || !conversation?.customer_psid) return;
@@ -314,7 +319,6 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
       if (fetchedPages.length > 0) {
         setPages(fetchedPages);
         localStorage.setItem('metapost_pages_cache', JSON.stringify(fetchedPages));
-        subscribeAllPagesWebhooks(fetchedPages).catch(() => {});
         return fetchedPages;
       }
     } catch {
@@ -332,9 +336,9 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
   const [isLoadingMore, setIsLoadingMore] = useState(false);
 
   // 3. Fetch All Conversations in Parallel (Throttled to avoid Rate Limit #4, supports Silent Background Sync)
-  const loadAllConversations = useCallback(async (currentPages = pages, silent = false) => {
+  const loadAllConversations = useCallback(async (currentPages = pages, silent = false, { partial = false } = {}) => {
     if (!fbToken || currentPages.length === 0) return;
-    if (silent && backgroundConversationSyncRunningRef.current) return;
+    if (silent && backgroundConversationSyncRunningRef.current) return false;
     if (silent) backgroundConversationSyncRunningRef.current = true;
     const requestId = ++conversationListRequestIdRef.current;
     if (!silent) {
@@ -344,9 +348,16 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
 
     try {
       const storedPageId = localStorage.getItem('metapost_selected_page_id') || selectedPageId;
-      const targetPages = storedPageId === 'all'
+      const selectedTargets = storedPageId === 'all'
         ? currentPages
         : currentPages.filter(p => p.id === storedPageId);
+      const targetPages = selectedTargets.filter(page => Date.now() >= (pageReadCooldownRef.current.get(page.id) || 0));
+      const coolingPages = selectedTargets.filter(page => !targetPages.includes(page));
+      if (!targetPages.length) {
+        setConversationLoadError({ pageId: storedPageId,
+          message: 'Đang chờ Meta phục hồi. Tạm nghỉ khoảng một phút trước khi tải lại; dữ liệu cũ được giữ nguyên.' });
+        return;
+      }
       const conversationLimit = storedPageId === 'all' ? (silent ? 10 : 20) : 50;
 
       const progressiveConversationMap = new Map(
@@ -388,11 +399,14 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
 
       let combined = [];
       const newCursors = {};
-      const failures = [];
+      const failures = coolingPages.map(page => ({ page, error: {
+        message: 'Đang chờ Meta phục hồi trước khi tải lại Page này.'
+      } }));
       let anyHasMore = false;
 
       results.forEach((res, index) => {
         if (res.status === 'fulfilled' && Array.isArray(res.value)) {
+          pageReadCooldownRef.current.delete(targetPages[index].id);
           combined.push(...res.value);
           const resultPageId = res.value.pageId || res.value[0]?.page_id;
           if (resultPageId) {
@@ -400,6 +414,9 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
             if (res.value.hasMore) anyHasMore = true;
           }
         } else if (res.status === 'rejected') {
+          if ([1, 2, 4, 17, 32, 613].includes(Number(res.reason?.code))) {
+            pageReadCooldownRef.current.set(targetPages[index].id, Date.now() + 60_000);
+          }
           failures.push({ page: targetPages[index], error: res.reason });
         }
       });
@@ -409,8 +426,15 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
         return;
       }
 
-      setPageCursors(newCursors);
-      setHasMoreOlder(anyHasMore);
+      if (!silent) {
+        if (failures.length) {
+          setPageCursors(prev => ({ ...prev, ...newCursors }));
+          setHasMoreOlder(prev => prev || anyHasMore);
+        } else {
+          setPageCursors(newCursors);
+          setHasMoreOlder(anyHasMore);
+        }
+      }
       if (failures.length > 0) {
         const firstFailure = failures[0];
         setConversationLoadError({
@@ -431,7 +455,9 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
       combined = mergeRefreshedPageConversations(
         combined,
         conversationsRef.current,
-        targetPages.map(page => page.id)
+        partial && storedPageId === 'all'
+          ? [...new Set([...targetPages.map(page => page.id), ...conversationsRef.current.map(c => c.page_id)])]
+          : selectedTargets.map(page => page.id)
       );
 
       // Apply read tracking, new message notification, and persistent labels
@@ -449,10 +475,10 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
         const previousMarker = notificationHeadsRef.current.get(notificationKey);
         notificationHeadsRef.current.set(notificationKey, notificationMarker);
         if (
-          previousMarker
+          notificationBootCompleteRef.current
           && previousMarker !== notificationMarker
           && c.last_sender_id
-          && c.last_sender_id !== c.page_id
+          && String(c.last_sender_id) !== String(c.page_id)
         ) {
           triggerNewMessageNotification({
             pageId: c.page_id,
@@ -484,6 +510,8 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
 
       conversationsRef.current = combined;
       setConversations(combined);
+      // After the first full load, enable notification detection for subsequent syncs.
+      notificationBootCompleteRef.current = true;
       const serializedConversations = JSON.stringify(combined);
       setCacheItemWithMessageEviction(localStorage, 'metapost_inbox_cache', serializedConversations);
       setCacheItemWithMessageEviction(
@@ -492,6 +520,11 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
         serializedConversations
       );
 
+      // Update the selected thread metadata on both layouts, without opening
+      // a conversation or marking it read on mobile.
+      const refreshedThread = combined.find(c => c.fb_conversation_id === activeConversationRef.current?.fb_conversation_id);
+      if (refreshedThread) setActiveConversation(prev => prev?.fb_conversation_id === refreshedThread.fb_conversation_id
+        ? { ...prev, ...refreshedThread } : prev);
       // Restore active conversation from localStorage on load/F5 (ONLY for Desktop 2-pane view, NEVER auto-open on mobile)
       const isDesktop = window.innerWidth >= 768;
       if (isDesktop) {
@@ -590,6 +623,7 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
   // 4. Select Conversation with Instant SWR Cache
   const handleSelectConversation = async (conv, shouldSwitchMobileView = true) => {
     const requestId = ++messageRequestIdRef.current;
+    initialMessageLoadRef.current = true;
     const conversationId = conv.fb_conversation_id;
     let hadCachedMessages = false;
     let cachedMessages = [];
@@ -799,7 +833,10 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
         setMessageLoadError(err?.message || 'Không tải được tin nhắn từ Meta.');
       }
     } finally {
-      if (requestId === messageRequestIdRef.current) setIsLoadingMessages(false);
+      if (requestId === messageRequestIdRef.current) {
+        initialMessageLoadRef.current = false;
+        setIsLoadingMessages(false);
+      }
     }
   };
 
@@ -858,91 +895,141 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
     }
   };
 
-  // 5. Real-time Active Thread Polling (Sync new messages in 3-4s without page reload)
+  // Push wakes only the matching chat. Polling also catches replies sent from
+  // Business Suite (echo messages do not produce customer Push notifications).
   useEffect(() => {
     if (!activeConversation?.fb_conversation_id || !fbToken) return;
-
-    const convId = activeConversation.fb_conversation_id;
-    const pageId = activeConversation.page_id;
-    const pageName = activeConversation.page_name;
-    const customerName = activeConversation.customer_name;
-    const customerPsid = activeConversation.customer_psid;
-    const avatarUrl = activeConversation.avatar_url;
-    const token = activeConversation.page_token || fbToken;
-
-    let isSyncing = false;
-    let lastSyncAt = 0;
-    const syncActiveThread = async () => {
-      if (document.hidden || !navigator.onLine) return;
-      if (isSyncing) return;
-      if (Date.now() - lastSyncAt < 5_000) return;
-      isSyncing = true;
-      lastSyncAt = Date.now();
+    const conversation = activeConversation;
+    const convId = conversation.fb_conversation_id;
+    const token = conversation.page_token || fbToken;
+    let disposed = false;
+    let followup = null;
+    let retryAfter = 0;
+    const isCurrent = requestId => !disposed && isConversationRequestCurrent({
+      activeConversationId: activeConversationRef.current?.fb_conversation_id,
+      conversationId: convId,
+      currentRequestId: messageRequestIdRef.current,
+      requestId
+    });
+    const queue = createSyncQueue(async () => {
+      if (disposed || document.hidden || !navigator.onLine) return;
+      if (Date.now() < retryAfter) return;
+      if (window.innerWidth < 768 && mobileView !== 'chat') return;
+      if (initialMessageLoadRef.current) { queue.request(); return; }
+      const requestId = messageRequestIdRef.current;
       try {
-        const latestMsgs = await runWithCrossTabSyncLock(
-          `active-thread-${convId}`,
-          () => fetchConversationMessages(convId, token, null, ACTIVE_THREAD_SYNC_LIMIT),
-          { leaseMs: 30_000 }
+        // Queue coalesces this tab. Each visible tab needs its own result;
+        // an exclusive cross-tab lock without broadcasting results starves peers.
+        const latest = await fetchConversationMessages(convId, token, null, ACTIVE_THREAD_SYNC_LIMIT);
+        if (!isCurrent(requestId)) return;
+        retryAfter = 0;
+        setMessageLoadError('');
+        if (!Array.isArray(latest)) return;
+        const previous = messagesRef.current;
+        const latestKnownTime = Math.max(0, ...previous.map(m => Date.parse(m.created_time) || 0));
+        const previousIds = new Set(previous.map(m => m.id));
+        const incoming = [...latest].reverse().find(m =>
+          !previousIds.has(m.id) && Date.parse(m.created_time) > latestKnownTime
+          && m.from?.id && String(m.from.id) !== String(conversation.page_id)
         );
-        if (latestMsgs && latestMsgs.length > 0) {
-          setMessages(prev => {
-            const prevIds = new Set(prev.map(m => m.id));
-            const newMessages = latestMsgs.filter(message => !prevIds.has(message.id));
-            const hasNew = newMessages.length > 0;
-            if (hasNew) {
-              // Notify only for a genuinely new incoming message. Sent Page
-              // messages and older records entering the window stay silent.
-              const incomingMessage = [...newMessages]
-                .reverse()
-                .find(message => message?.from?.id && message.from.id !== pageId);
-              if (incomingMessage) {
-                triggerNewMessageNotification({
-                  pageId,
-                  pageName,
-                  convId,
-                  customerName,
-                  messageId: incomingMessage.id,
-                  messageText: incomingMessage.message || 'Khách hàng vừa gửi tin nhắn mới',
-                  avatarUrl,
-                  playSound: true
-                });
-              }
-              const merged = mergeMessageWindow(prev, latestMsgs);
-              persistMessageCache(convId, merged);
-              return merged;
-            }
-            return prev;
-          });
+        const merged = mergeMessageWindow(previous, latest);
+        if (JSON.stringify(merged) === JSON.stringify(previous)) return;
+        messagesRef.current = merged;
+        persistMessageCache(convId, merged);
+        setMessages(prev => isCurrent(requestId) ? mergeMessageWindow(prev, latest) : prev);
+        if (incoming) {
+          triggerNewMessageNotification({
+            pageId: conversation.page_id, pageName: conversation.page_name,
+            convId, customerName: conversation.customer_name,
+            messageId: incoming.id, messageText: incoming.message || 'Khách vừa gửi tệp đính kèm',
+            avatarUrl: conversation.avatar_url, playSound: true
+          }).catch(() => {});
         }
-      } catch (e) {
-        // A later poll or focus event retries without interrupting the chat UI.
-      } finally {
-        isSyncing = false;
+      } catch (error) {
+        retryAfter = Date.now() + ([1, 2, 4, 17, 32, 613].includes(Number(error?.code)) ? 60_000 : 10_000);
+        if (isCurrent(requestId)) setMessageLoadError(
+          'Chưa đồng bộ được tin mới: ' + (error?.message || 'Lỗi kết nối Meta.') + ' Đang giữ tin đã tải.'
+        );
       }
+    });
+    const wake = () => { if (!document.hidden) queue.request(); };
+    const onPush = event => {
+      if (!matchesActiveThread(event.detail, conversation)) return;
+      queue.request();
+      // Meta's read API can lag behind its webhook. One bounded follow-up.
+      if (followup === null) followup = setTimeout(() => {
+        followup = null;
+        queue.request();
+      }, 2000);
     };
-
-    const handleVisibilitySync = () => {
-      if (!document.hidden) syncActiveThread();
-    };
-    const pollTimer = setInterval(syncActiveThread, ACTIVE_THREAD_SYNC_MS);
-    window.addEventListener('focus', syncActiveThread);
-    document.addEventListener('visibilitychange', handleVisibilitySync);
-
+    const timer = setInterval(wake, ACTIVE_THREAD_SYNC_MS);
+    window.addEventListener(INBOX_PUSH_EVENT, onPush);
+    window.addEventListener('focus', wake);
+    window.addEventListener('online', wake);
+    document.addEventListener('visibilitychange', wake);
     return () => {
-      clearInterval(pollTimer);
-      window.removeEventListener('focus', syncActiveThread);
-      document.removeEventListener('visibilitychange', handleVisibilitySync);
+      disposed = true;
+      queue.dispose();
+      clearInterval(timer);
+      clearTimeout(followup);
+      window.removeEventListener(INBOX_PUSH_EVENT, onPush);
+      window.removeEventListener('focus', wake);
+      window.removeEventListener('online', wake);
+      document.removeEventListener('visibilitychange', wake);
     };
-  }, [
-    activeConversation?.fb_conversation_id,
-    activeConversation?.page_id,
-    activeConversation?.page_name,
-    activeConversation?.customer_name,
-    activeConversation?.customer_psid,
-    activeConversation?.avatar_url,
-    activeConversation?.page_token,
-    fbToken
-  ]);
+  }, [activeConversation?.fb_conversation_id, activeConversation?.page_token, fbToken, mobileView]);
+
+  // Targeted Page refresh on Push; never switch the operator's selected Page.
+  const loadListRef = useRef(loadAllConversations);
+  loadListRef.current = loadAllConversations;
+  useEffect(() => {
+    if (!fbToken) return;
+    const pendingPages = new Set();
+    const followupPages = new Set();
+    let followupTimer = null;
+    const queue = createSyncQueue(async () => {
+      if (document.hidden || !navigator.onLine) return; // retain dirty Pages until focus
+      const cached = getStoredArray('metapost_pages_cache');
+      const visible = getStoredArray('metapost_visible_page_ids');
+      const selected = localStorage.getItem('metapost_selected_page_id') || 'all';
+      const targets = cached.filter(page => pendingPages.has(String(page.id))
+        && (!visible.length || visible.includes(page.id))
+        && (selected === 'all' || String(page.id) === selected));
+      if (!targets.length) { pendingPages.clear(); return; }
+      if (backgroundConversationSyncRunningRef.current) { queue.request(); return; }
+      targets.forEach(page => pendingPages.delete(String(page.id)));
+      await loadListRef.current(targets, true, { partial: true });
+      if (pendingPages.size) queue.request();
+    }, { minGapMs: 1500, onError: () => setConversationLoadError({
+      pageId: localStorage.getItem('metapost_selected_page_id') || 'all',
+      message: 'Chưa đồng bộ được danh sách. Đang giữ dữ liệu cũ; hãy thử làm mới.'
+    }) });
+    const onPush = event => {
+      if (!event.detail?.pageId) return;
+      pendingPages.add(String(event.detail.pageId));
+      queue.request();
+      followupPages.add(String(event.detail.pageId));
+      if (followupTimer === null) followupTimer = setTimeout(() => {
+        followupTimer = null;
+        followupPages.forEach(id => pendingPages.add(id));
+        followupPages.clear();
+        queue.request();
+      }, 2500);
+    };
+    const wake = () => { if (pendingPages.size && !document.hidden) queue.request(); };
+    window.addEventListener(INBOX_PUSH_EVENT, onPush);
+    window.addEventListener('focus', wake);
+    window.addEventListener('online', wake);
+    document.addEventListener('visibilitychange', wake);
+    return () => {
+      queue.dispose();
+      clearTimeout(followupTimer);
+      window.removeEventListener(INBOX_PUSH_EVENT, onPush);
+      window.removeEventListener('focus', wake);
+      window.removeEventListener('online', wake);
+      document.removeEventListener('visibilitychange', wake);
+    };
+  }, [fbToken]);
 
   // Meta labels are refreshed when a conversation is selected or explicitly
   // changed. Continuous label polling caused needless Graph traffic and could
@@ -1416,10 +1503,10 @@ export default function CRMInbox({ fbToken, notificationTarget = null, onOpenTok
           notificationHeadsRef.current.set(conversationKey, marker);
 
           if (
-            previousMarker
+            notificationBootCompleteRef.current
             && previousMarker !== marker
             && head.sender_id
-            && head.sender_id !== head.page_id
+            && String(head.sender_id) !== String(head.page_id)
           ) {
             triggerNewMessageNotification({
               pageId: head.page_id,

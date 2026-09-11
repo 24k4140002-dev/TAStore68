@@ -127,6 +127,7 @@ export async function safeFetch(url, options = {}, timeoutMs = 20000) {
       err.userTitle = facebookError.error_user_title;
       err.userMessage = facebookError.error_user_msg;
       err.httpStatus = res.status;
+      err.traceId = facebookError.fbtrace_id || null;
       err.transient = code === 1 || code === 2 || code === 4 || code === 17 || code === 32 || code === 341 || code === 613 || res.status >= 500;
       throw err;
     }
@@ -345,15 +346,41 @@ export async function enrichPagesWithLikes(pages, fbToken) {
 export async function fetchPages(fbToken) {
   const cleanToken = (fbToken || '').trim();
   if (!cleanToken) return [];
-  const res = await safeFetch(
-    `${API_BASE}/me/accounts?fields=id,name,category,access_token,picture{data{url}},tasks,fan_count,followers_count,username&limit=100&access_token=${encodeURIComponent(cleanToken)}`
-  );
-  const rawPages = res.data || [];
-  if (rawPages.length === 0) return [];
-
-  // Automatically enrich duplicate-named pages with real fan_count from Facebook
-  const enriched = await enrichPagesWithLikes(rawPages, cleanToken);
-  return enriched;
+  try {
+    const res = await safeFetch(
+      `${API_BASE}/me/accounts?fields=id,name,category,access_token,picture{data{url}},tasks,fan_count,followers_count,username&limit=100&access_token=${encodeURIComponent(cleanToken)}`
+    );
+    const rawPages = res.data || [];
+    if (rawPages.length > 0) {
+      // Automatically enrich duplicate-named pages with real fan_count from Facebook
+      return await enrichPagesWithLikes(rawPages, cleanToken);
+    }
+  } catch (err) {
+    // If user passed a Page Access Token directly instead of User Token, error 100 occurs because Page node has no 'accounts' field
+    if (Number(err?.code) === 100 || err?.message?.includes('accounts')) {
+      try {
+        const pageInfo = await safeFetch(
+          `${API_BASE}/me?fields=id,name,category,picture{data{url}},fan_count,followers_count,username&access_token=${encodeURIComponent(cleanToken)}`
+        );
+        if (pageInfo?.id && pageInfo?.name) {
+          return [{
+            id: String(pageInfo.id),
+            name: pageInfo.name,
+            category: pageInfo.category || 'Page',
+            access_token: cleanToken,
+            picture: pageInfo.picture || { data: { url: null } },
+            fan_count: pageInfo.fan_count || 0,
+            followers_count: pageInfo.followers_count || 0,
+            username: pageInfo.username || ''
+          }];
+        }
+      } catch {
+        throw err;
+      }
+    }
+    throw err;
+  }
+  return [];
 }
 
 // Fetch conversations for a specific page with participant avatars & snippet (supports pagination)
@@ -364,7 +391,26 @@ export async function fetchPageConversations(pageId, pageName, pageToken, afterC
   if (afterCursor) {
     url += `&after=${encodeURIComponent(afterCursor)}`;
   }
-  const res = await safeFetch(url);
+  let res;
+  try {
+    res = await safeFetch(url);
+  } catch (error) {
+    // Only retry transient Meta read failures, never writes, auth failures or
+    // rate limits. Remove optional media/avatar expansion and reduce the batch.
+    if (![1, 2].includes(Number(error?.code))) throw error;
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    const fallback = new URL(url);
+    fallback.searchParams.set('limit', String(Math.min(safeLimit, 10)));
+    fallback.searchParams.set('fields', 'id,updated_time,unread_count,participants{id,name},can_reply,messages.limit(1){id,message,created_time,from}');
+    try {
+      res = await safeFetch(fallback.toString());
+    } catch (retryError) {
+      if ([1, 2].includes(Number(retryError?.code))) {
+        retryError.message = `Meta tạm lỗi khi tải Page (${retryError.code}). Đã thử lại một lần; vui lòng chờ khoảng một phút rồi tải lại.`;
+      }
+      throw retryError;
+    }
+  }
 
   const conversations = (res.data || []).map(conv => {
       const participants = conv.participants?.data || [];

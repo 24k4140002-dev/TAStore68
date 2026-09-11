@@ -18,6 +18,7 @@ import {
   fetchPageConversations,
   fetchPageConversationHeads,
   fetchPageLabels,
+  fetchPages,
   fetchUserLabels,
   formatMessengerSendError,
   generateSmartAntiSpam,
@@ -33,6 +34,28 @@ import {
 } from '../src/services/facebookApi.js';
 
 const originalFetch = globalThis.fetch;
+
+test('Page token fallback preserves existing direct-Page support', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => ++calls === 1
+    ? Response.json({ error: { code: 100, message: 'Page has no accounts field' } }, { status: 400 })
+    : Response.json({ id: '123', name: 'Synthetic Page', fan_count: 42 });
+  const pages = await fetchPages('synthetic-page-token');
+  assert.equal(pages.length, 1);
+  assert.equal(pages[0].id, '123');
+  assert.equal(pages[0].access_token, 'synthetic-page-token');
+  assert.equal(calls, 2);
+});
+
+test('invalid user token never falls back to a guessed Page', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return Response.json({ error: { code: 190, message: 'Token expired' } }, { status: 400 });
+  };
+  await assert.rejects(fetchPages('synthetic-expired'), e => e.code === 190);
+  assert.equal(calls, 1);
+});
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -287,6 +310,49 @@ test('conversation list supports a smaller refresh window for multi-Page polling
   await fetchPageConversations('page_1', 'Page A', 'synthetic-page-token', null, 10);
 
   assert.equal(new URL(requestedUrl).searchParams.get('limit'), '10');
+});
+
+test('Meta #2 conversation read retries once with a lighter query and preserves cursor/unread', async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url: new URL(url), options });
+    if (calls.length === 1) return Response.json({ error: { code: 2, message: 'Temporary', fbtrace_id: 'synthetic-trace' } }, { status: 500 });
+    return Response.json({ data: [{ id: 'conv1', unread_count: 3, participants: { data: [{ id: 'customer1', name: 'Synthetic' }] } }],
+      paging: { cursors: { after: 'next-cursor' }, next: 'https://graph.facebook.com/next' } });
+  };
+  const result = await fetchPageConversations('page1', 'Synthetic Page', 'synthetic-token', 'old-cursor', 50);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].url.searchParams.get('limit'), '10');
+  assert.equal(calls[1].url.searchParams.get('after'), 'old-cursor');
+  assert.equal(calls[1].url.searchParams.has('access_token'), false);
+  assert.equal(calls[1].options.headers.get('Authorization'), 'Bearer synthetic-token');
+  assert.doesNotMatch(calls[1].url.searchParams.get('fields'), /attachments|picture/);
+  assert.equal(result[0].unread_count, 3);
+  assert.equal(result.nextCursor, 'next-cursor');
+  assert.equal(result.hasMore, true);
+});
+
+test('persistent Meta #2 stops after two reads and exposes a useful error', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return Response.json({ error: { code: 2, message: 'Temporary', fbtrace_id: 'synthetic-trace' } }, { status: 500 });
+  };
+  await assert.rejects(fetchPageConversations('page1', 'Synthetic', 'synthetic-token'), e =>
+    e.code === 2 && e.traceId === 'synthetic-trace' && /một lần/.test(e.message));
+  assert.equal(calls, 2);
+});
+
+test('conversation read does not retry auth, permission or rate-limit errors', async () => {
+  for (const code of [190, 200, 4, 613]) {
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return Response.json({ error: { code, message: 'Synthetic failure' } }, { status: 400 });
+    };
+    await assert.rejects(fetchPageConversations('page1', 'Synthetic', 'synthetic-token'), e => e.code === code);
+    assert.equal(calls, 1);
+  }
 });
 
 test('cross-Page notification scan fetches lightweight message heads with Page identity', async () => {

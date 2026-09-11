@@ -1,5 +1,5 @@
 // TAStore68 Pro — Service Worker for Web Push & Lock Screen Notifications
-const CACHE_NAME = 'tastore68-v6';
+const CACHE_NAME = 'tastore68-v7';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -53,14 +53,28 @@ self.addEventListener('push', (event) => {
     notificationData.kind === 'setup'
       ? Promise.resolve()
       : self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
-          clientList.forEach(client => client.postMessage({ type: 'PUSH_DELIVERED', pageId }));
+          clientList.forEach(client => client.postMessage({
+            type: 'PUSH_DELIVERED', pageId,
+            convId: notificationData.convId || '',
+            senderPsid: notificationData.senderPsid || '',
+            messageId: notificationData.messageId || ''
+          }));
         })
-  )));
+  )).then(() => {
+    // Show badge indicator on the home screen app icon (PWA).
+    if (self.navigator && 'setAppBadge' in self.navigator) {
+      return self.navigator.setAppBadge().catch(() => {});
+    }
+  }));
 });
 
 // Handle Notification Click (Deep-Linking directly to Customer Chat & Page)
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  // Clear badge indicator when user interacts with notification.
+  if (self.navigator && 'clearAppBadge' in self.navigator) {
+    self.navigator.clearAppBadge().catch(() => {});
+  }
   const data = event.notification.data || {};
   const pageId = data.pageId || 'all';
   const convId = data.convId || '';

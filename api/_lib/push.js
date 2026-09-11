@@ -6,7 +6,8 @@ const DEFAULT_PUSH_ENDPOINT_HOST_SUFFIXES = Object.freeze([
   'fcm.googleapis.com',
   'push.services.mozilla.com',
   'web.push.apple.com',
-  'notify.windows.com'
+  'notify.windows.com',
+  'wns.windows.com'
 ]);
 
 const JSON_HEADERS = {
@@ -429,7 +430,7 @@ export async function sendSubscriptionTestPush(subscription, pages = []) {
   await webpush.sendNotification(
     subscription,
     JSON.stringify(buildPushReadyPayload(pages.length)),
-    { TTL: PUSH_TTL_SECONDS, urgency: 'high', timeout: 3000 }
+    { TTL: PUSH_TTL_SECONDS, urgency: 'high', timeout: 8000 }
   );
 }
 
@@ -525,7 +526,7 @@ export async function sendPageMessagePush({ pageId, senderPsid, message }) {
       if (!isValidPushSubscription(subscription)) {
         throw Object.assign(new Error('Stored push subscription is invalid'), { statusCode: 410 });
       }
-      await webpush.sendNotification(subscription, payload, { TTL: PUSH_TTL_SECONDS, urgency: 'high', timeout: 3000 });
+      await webpush.sendNotification(subscription, payload, { TTL: PUSH_TTL_SECONDS, urgency: 'high', timeout: 8000 });
       return true;
     } catch (error) {
       if (error?.statusCode === 404 || error?.statusCode === 410) {

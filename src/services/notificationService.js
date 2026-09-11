@@ -1,5 +1,6 @@
 // TAStore68 Pro — Notification Service with Web Audio API + HTML5 Audio Fallback & Web Push
 import { shouldRefreshPushRegistration, shouldUseServerPush } from './pushState.js';
+import { INBOX_PUSH_EVENT, normalizePushSignal } from './inboxSync.js';
 
 let audioCtx = null;
 let isAudioUnlocked = false;
@@ -154,15 +155,18 @@ export function unlockAudio() {
   try {
     const el = getOrCreateAudioElement();
     if (el) {
-      const wasMuted = el.muted;
-      el.muted = true;
+      // iOS Safari requires genuine unmuted playback to unlock the element.
+      // Volume 0.001 is inaudible but counts as unmuted for autoplay policy.
+      const wasVolume = el.volume;
+      el.muted = false;
+      el.volume = 0.001;
       el.play().then(() => {
         el.pause();
         el.currentTime = 0;
-        el.muted = wasMuted;
+        el.volume = wasVolume;
         isAudioUnlocked = true;
       }).catch(() => {
-        el.muted = wasMuted;
+        el.volume = wasVolume;
       });
     }
 
@@ -211,10 +215,11 @@ export function playNotificationChime() {
       const playPromise = el.play();
       if (playPromise !== undefined) {
         playPromise.catch(() => {
-          // Fallback: Web Audio API
+          // Fallback: Web Audio API — must await resume before scheduling nodes
           if (audioCtx) {
-            if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-            playWebAudioChime(audioCtx);
+            (audioCtx.state === 'suspended' ? audioCtx.resume() : Promise.resolve())
+              .then(() => playWebAudioChime(audioCtx))
+              .catch(() => {});
           }
         });
       }
@@ -223,8 +228,9 @@ export function playNotificationChime() {
 
     // 3. Fallback: Web Audio API
     if (audioCtx) {
-      if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-      playWebAudioChime(audioCtx);
+      (audioCtx.state === 'suspended' ? audioCtx.resume() : Promise.resolve())
+        .then(() => playWebAudioChime(audioCtx))
+        .catch(() => {});
     }
   } catch (e) {
     console.warn('Play chime error:', e);
@@ -271,7 +277,7 @@ export async function registerServiceWorker(onNavigateCallback = null) {
       serviceWorkerNavigateCallback = onNavigateCallback;
     }
 
-    const reg = await navigator.serviceWorker.register('/sw.js?v=6', {
+    const reg = await navigator.serviceWorker.register('/sw.js?v=7', {
       scope: '/',
       updateViaCache: 'none'
     });
@@ -281,9 +287,14 @@ export async function registerServiceWorker(onNavigateCallback = null) {
     if (!serviceWorkerMessageListenerInstalled) {
       navigator.serviceWorker.addEventListener('message', (event) => {
         if (event.data?.type === 'PUSH_DELIVERED') {
-          const receivedPages = JSON.parse(localStorage.getItem('metapost_push_received_pages') || '{}');
-          receivedPages[event.data.pageId] = Date.now();
-          localStorage.setItem('metapost_push_received_pages', JSON.stringify(receivedPages));
+          const signal = normalizePushSignal(event.data);
+          if (!signal) return;
+          try {
+            const receivedPages = JSON.parse(localStorage.getItem('metapost_push_received_pages') || '{}');
+            receivedPages[signal.pageId] = Date.now();
+            localStorage.setItem('metapost_push_received_pages', JSON.stringify(receivedPages));
+          } catch { /* Optional storage must never stop live Inbox refresh. */ }
+          window.dispatchEvent(new CustomEvent(INBOX_PUSH_EVENT, { detail: signal }));
           window.dispatchEvent(new CustomEvent('metapost-push-webhook-ready'));
         }
         if (event.data?.type === 'NAVIGATE_TO_CONVERSATION') {
@@ -536,16 +547,18 @@ export async function triggerNewMessageNotification({
     return { delivered: false, reason: 'duplicate' };
   }
 
-  // Once server Web Push is enabled, Meta's webhook owns both the OS alert and
-  // its sound. Polling remains for UI freshness but must not create a second ding.
+  // Service Workers cannot play custom audio. When the tab is visible the user
+  // expects an audible chime, so always deliver locally in the foreground.
+  // Only defer to server push when the tab is hidden (background / lock screen).
+  const tabVisible = typeof document !== 'undefined' && !document.hidden;
   let receivedPages = {};
   try { receivedPages = JSON.parse(localStorage.getItem('metapost_push_received_pages') || '{}'); } catch {}
-  if (!forceLocal && shouldUseServerPush({
+  if (!forceLocal && !tabVisible && shouldUseServerPush({
     enabled: localStorage.getItem('metapost_push_enabled') === 'true',
     permission: typeof Notification === 'undefined' ? 'default' : Notification.permission,
     pageId, receivedPages
   })) {
-    return { delivered: false, reason: 'server-push-enabled' };
+    return { delivered: false, reason: 'server-push-active-background' };
   }
 
   // 1. Play "Ting Ting" Chime

@@ -432,6 +432,12 @@ export default function ConversationSidebar({
       </div>
 
       {/* Conversations List (Touch-scroll-y) — Maximum Vertical Space */}
+      {loadError && loadError.pageId === selectedPageId && selectedPageConversationCount > 0 && (
+        <div role="status" className="mx-2 my-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          <p>{loadError.message}</p>
+          <button type="button" onClick={onRefresh} disabled={isLoading} className="mt-1 font-bold underline">Thử đồng bộ lại</button>
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/60 touch-scroll-y overscroll-contain">
         {pages.length === 0 ? (
           <div className="h-64 flex flex-col items-center justify-center p-6 text-center text-slate-400">
